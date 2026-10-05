@@ -40,7 +40,7 @@ export function isTerminal(status: string): boolean {
  * The `series` query naming one of the run's stored paths.
  *
  * A run keeps a separate real envelope. Its accounts, cash flows and ledger
- * describe a nominal-terminal-ranked representative path, named by the actual
+ * describe one representative path that tracks its band, named by the actual
  * response `series_id`. These selector requests resolve to the nearest stored
  * rank; detail/ledger requests must use the resolved ID, not the selector target.
  */

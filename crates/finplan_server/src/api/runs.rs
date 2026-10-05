@@ -306,7 +306,7 @@ struct StatsRow {
 #[ts(export, optional_fields = nullable)]
 pub struct ResultsQuery {
     /// Which path the per-account series and cash flows describe. Defaults to
-    /// the terminal nominal median-ranked path; `mean` is a synthetic nominal average.
+    /// the path that tracks the median band; `mean` is a synthetic nominal average.
     #[serde(default)]
     pub series: Option<String>,
 }

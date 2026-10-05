@@ -13,6 +13,9 @@ use crate::model::{RealNetWorthSummary, RealQuantilePoint, RealTerminalStats, Si
 pub struct RealAccumulator {
     dates: Vec<jiff::civil::Date>,
     columns: Vec<Vec<f64>>,
+    /// The seed of each iteration, aligned to every column's rows.
+    #[serde(default)]
+    seeds: Vec<u64>,
 }
 
 fn snapshots(result: &SimulationResult) -> BTreeMap<jiff::civil::Date, f64> {
@@ -30,10 +33,15 @@ impl RealAccumulator {
         Self {
             columns: vec![Vec::new(); dates.len()],
             dates,
+            seeds: Vec::new(),
         }
     }
 
-    pub(super) fn accumulate(&mut self, result: &SimulationResult) -> Result<(), SimulationError> {
+    pub(super) fn accumulate(
+        &mut self,
+        seed: u64,
+        result: &SimulationResult,
+    ) -> Result<(), SimulationError> {
         let points = snapshots(result);
         if points.len() != self.dates.len()
             || !points.keys().eq(self.dates.iter())
@@ -58,14 +66,62 @@ impl RealAccumulator {
             }
             column.push(real);
         }
+        self.seeds.push(seed);
         Ok(())
     }
 
-    pub(super) fn merge(&mut self, other: Self) {
+    pub(super) fn merge(&mut self, mut other: Self) {
         debug_assert_eq!(self.dates, other.dates);
         for (column, mut values) in self.columns.iter_mut().zip(other.columns) {
             column.append(&mut values);
         }
+        self.seeds.append(&mut other.seeds);
+    }
+
+    /// For each percentile `p`, the seed of the path that tracks `p`'s band.
+    ///
+    /// A path's rank among all paths at a date, scaled to `[0, 1]` the way
+    /// the bands' quantiles are (`(N - 1) * p`, ties sharing their mean rank),
+    /// says which band it sits on there. The chosen path minimizes the squared
+    /// distance between that rank and `p`, summed over every date of the grid.
+    /// Ranks rather than dollars: wealth grows over the horizon and depleted
+    /// paths sit at zero, so dollar distances would let the last years decide.
+    ///
+    /// Equal scores go to the earlier iteration, so the choice depends on the
+    /// merge order alone. Empty when nothing was accumulated.
+    pub(super) fn representative_seeds(&self, percentiles: &[f64]) -> Vec<(f64, u64)> {
+        let n = self.seeds.len();
+        if n == 0 {
+            return Vec::new();
+        }
+        let scale = (n - 1).max(1) as f64;
+        let mut scores = vec![vec![0.0_f64; n]; percentiles.len()];
+        let mut order: Vec<usize> = (0..n).collect();
+        for column in &self.columns {
+            order.sort_unstable_by(|&a, &b| column[a].total_cmp(&column[b]));
+            let mut start = 0;
+            while start < n {
+                let mut end = start + 1;
+                while end < n && column[order[end]] == column[order[start]] {
+                    end += 1;
+                }
+                let rank = (start + end - 1) as f64 / 2.0 / scale;
+                for &path in &order[start..end] {
+                    for (score, &p) in scores.iter_mut().zip(percentiles) {
+                        score[path] += (rank - p).powi(2);
+                    }
+                }
+                start = end;
+            }
+        }
+        percentiles
+            .iter()
+            .zip(&scores)
+            .map(|(&p, score)| {
+                let best = (1..n).fold(0, |best, i| if score[i] < score[best] { i } else { best });
+                (p, self.seeds[best])
+            })
+            .collect()
     }
 
     pub(super) fn finish(mut self) -> Result<RealNetWorthSummary, SimulationError> {

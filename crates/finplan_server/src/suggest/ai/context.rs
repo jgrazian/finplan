@@ -445,7 +445,7 @@ pub fn render_path(
         .collect();
     let _ = writeln!(
         out,
-        "Path for `{asked}`: the stored P{:.0} path, ranked by final nominal net worth. The run stores {}.",
+        "Path for `{asked}`: the stored P{:.0} path, the iteration that tracks that band over the horizon. The run stores {}.",
         shown * 100.0,
         stored.join(", ")
     );

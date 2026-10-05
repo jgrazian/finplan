@@ -2,9 +2,14 @@
 
 ## Measurement contract
 
-- Representative paths retain the legacy selection rule: sort **terminal nominal
-  net worth**, then choose index `min(floor(N * p), N - 1)`. Deflating a selected
-  path does not turn it into a pointwise percentile or a real-median path.
+- Representative paths track their band. At every grid date each iteration's
+  real net worth is ranked among all iterations and scaled like the quantiles
+  (`rank / (N - 1)`, ties sharing their mean rank); the path for `p` is the one
+  minimizing the sum over dates of `(rank - p)^2`, the earlier iteration winning
+  ties. It is still one real iteration with a coherent ledger, not a pointwise
+  percentile, and its terminal value need not equal `percentile_values`, which
+  keep the terminal nominal rule `min(floor(N * p), N - 1)`. Runs stored before
+  this used that rule for the path too; stats-only runs (sweeps) still do.
 - The independent envelope uses **all** Monte Carlo iterations. Each observation
   is deflated with that iteration's own cumulative inflation **before** sorting.
   At each date P5/P50/P95 use type-7 linear interpolation: `h = (N - 1) * p`,

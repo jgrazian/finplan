@@ -41,10 +41,10 @@ fn crossing_paths_real_ranks_interpolation_and_warning_paths() {
         account_id: None,
     });
     let mut acc = RealAccumulator::new(&a);
-    acc.accumulate(&a).unwrap();
+    acc.accumulate(1, &a).unwrap();
     let mut other = RealAccumulator::new(&a);
-    other.accumulate(&b).unwrap();
-    other.accumulate(&c).unwrap();
+    other.accumulate(2, &b).unwrap();
+    other.accumulate(3, &c).unwrap();
     acc.merge(other);
     let real = acc.finish().unwrap();
     assert_eq!(real.base_date, date(2026, 6, 1));
@@ -70,6 +70,46 @@ fn crossing_paths_real_ranks_interpolation_and_warning_paths() {
     assert_ne!(last.p50, final_net_worth(&a) / 4.0);
 }
 
+/// The path drawn for a percentile is the one that stays on its band, not the
+/// one that ends there: seed 3 ends at the median by way of the bottom.
+#[test]
+fn representative_paths_track_their_band_rather_than_their_end() {
+    let paths = [
+        (1, [100.0, 10.0, 10.0]),
+        (2, [100.0, 50.0, 20.0]),
+        (3, [100.0, 5.0, 30.0]),
+        (4, [100.0, 40.0, 40.0]),
+        (5, [100.0, 60.0, 50.0]),
+    ];
+    let template = fixture(paths[0].1, 1.0);
+    let mut acc = RealAccumulator::new(&template);
+    for (seed, values) in paths {
+        acc.accumulate(seed, &fixture(values, 1.0)).unwrap();
+    }
+    // Ranks (start, mid, end), scaled: 1 (.5, .25, 0), 2 (.5, .75, .25),
+    // 3 (.5, 0, .5), 4 (.5, .5, .75), 5 (.5, 1, 1).
+    assert_eq!(
+        acc.representative_seeds(&[0.25, 0.5, 0.75]),
+        vec![(0.25, 1), (0.5, 4), (0.75, 4)]
+    );
+
+    // Identical paths tie everywhere: the earliest iteration wins.
+    let path = fixture([100.0, 100.0, 100.0], 1.0);
+    let mut same = RealAccumulator::new(&path);
+    for seed in [9, 8, 7] {
+        same.accumulate(seed, &path).unwrap();
+    }
+    assert_eq!(
+        same.representative_seeds(&[0.1, 0.9]),
+        vec![(0.1, 9), (0.9, 9)]
+    );
+    assert!(
+        RealAccumulator::new(&path)
+            .representative_seeds(&[0.5])
+            .is_empty()
+    );
+}
+
 #[test]
 fn singleton_duplicate_terminal_and_invalid_observations() {
     let mut path = fixture([100.0, 100.0, -20.0], 2.0);
@@ -78,7 +118,7 @@ fn singleton_duplicate_terminal_and_invalid_observations() {
         AccountSnapshotFlavor::Bank(999.0);
     path.wealth_snapshots.push(terminal);
     let mut acc = RealAccumulator::new(&path);
-    acc.accumulate(&path).unwrap();
+    acc.accumulate(0, &path).unwrap();
     let real = acc.finish().unwrap();
     assert_eq!(real.points.len(), 3);
     assert_eq!(real.terminal.std_dev, 0.0);
@@ -88,13 +128,13 @@ fn singleton_duplicate_terminal_and_invalid_observations() {
     );
     for factor in [0.0, -1.0, f64::NAN, f64::INFINITY] {
         let bad = fixture([100.0, 0.0, 1.0], factor);
-        assert!(RealAccumulator::new(&bad).accumulate(&bad).is_err());
+        assert!(RealAccumulator::new(&bad).accumulate(0, &bad).is_err());
     }
     let bad = fixture([100.0, f64::NAN, 1.0], 1.0);
-    assert!(RealAccumulator::new(&bad).accumulate(&bad).is_err());
+    assert!(RealAccumulator::new(&bad).accumulate(0, &bad).is_err());
     let mut missing = path.clone();
     missing.wealth_snapshots.remove(0);
-    assert!(RealAccumulator::new(&path).accumulate(&missing).is_err());
+    assert!(RealAccumulator::new(&path).accumulate(0, &missing).is_err());
 }
 
 #[test]
@@ -163,14 +203,43 @@ fn stochastic_inflation_aggregates_every_iteration_before_selecting_paths() {
             assert!((measured - expected).abs() < 1e-10);
         }
     }
+    // Each drawn path is the brute-force least-squares fit of its real rank,
+    // date by date, to its percentile.
+    let real_at = |path: &SimulationResult, date: jiff::civil::Date| {
+        let snapshot = path
+            .wealth_snapshots
+            .iter()
+            .rev()
+            .find(|s| s.date == date)
+            .unwrap();
+        let nominal: f64 = snapshot
+            .accounts
+            .iter()
+            .map(AccountSnapshot::total_value)
+            .sum();
+        nominal / path.cumulative_inflation[(date.year() - 2026) as usize]
+    };
+    let scale = (paths.len() - 1) as f64;
+    for (p, path) in &summary.percentile_runs {
+        let score = |i: usize| -> f64 {
+            real.points
+                .iter()
+                .map(|point| {
+                    let own = real_at(&paths[i], point.date);
+                    let values = paths.iter().map(|other| real_at(other, point.date));
+                    let below = values.clone().filter(|v| *v < own).count();
+                    let equal = values.filter(|v| *v == own).count();
+                    let rank = (2 * below + equal - 1) as f64 / 2.0 / scale;
+                    (rank - p).powi(2)
+                })
+                .sum()
+        };
+        let scores: Vec<f64> = (0..paths.len()).map(score).collect();
+        let best = (1..paths.len()).fold(0, |b, i| if scores[i] < scores[b] { i } else { b });
+        assert_eq!(final_net_worth(path), final_net_worth(&paths[best]));
+    }
     let mut nominal: Vec<_> = paths.iter().collect();
     nominal.sort_by(|a, b| final_net_worth(a).total_cmp(&final_net_worth(b)));
-    for (p, path) in &summary.percentile_runs {
-        assert_eq!(
-            final_net_worth(path),
-            final_net_worth(nominal[(paths.len() as f64 * p).floor() as usize])
-        );
-    }
     let real_terminals: Vec<_> = paths
         .iter()
         .map(|p| final_net_worth(p) / p.cumulative_inflation[4])
@@ -215,7 +284,7 @@ fn identical_paths_report_identical_quantiles() {
         let path = fixture([value, value, value], inflation);
         let mut acc = RealAccumulator::new(&path);
         for _ in 0..7 {
-            acc.accumulate(&path).unwrap();
+            acc.accumulate(0, &path).unwrap();
         }
         let real = acc.finish().unwrap();
         for point in &real.points {

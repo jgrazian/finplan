@@ -1240,7 +1240,7 @@ pub fn run_batch_observed(
             ));
         }
         if let Some(acc) = &mut local_real {
-            acc.accumulate(&result)?;
+            acc.accumulate(seed, &result)?;
         }
         // A skipped/failed effect is not evidence that the plan was funded.
         local_stats.add(fnw, result.warnings.is_empty());
@@ -1530,7 +1530,14 @@ impl MonteCarloCoordinator {
             }
         }
 
-        // Phase 2: Re-run percentile seeds for full results (if requested)
+        // Phase 2 re-runs, for each percentile, the path that tracks its band
+        // over the whole horizon rather than the one that happens to end at
+        // it: a path can end at P50 by way of P5. The terminal values above
+        // stay exact; only the drawn path changes. Without real columns (a
+        // stats-only run) the terminal-ranked seed is all there is.
+        if let (Some(real), Some(_)) = (&self.real_accumulator, phase2_params) {
+            percentile_seeds = real.representative_seeds(&self.percentiles);
+        }
         let percentile_runs = match phase2_params {
             Some(params) => percentile_seeds
                 .iter()
@@ -1693,7 +1700,8 @@ fn monte_carlo_core(
 ///
 /// Runs simulations in two phases:
 /// 1. First pass: Keep (seed, nominal terminal wealth), real annual vectors and optional mean sums
-/// 2. Second pass: Re-run only the specific seeds needed for percentile runs
+/// 2. Second pass: Re-run only the seed of the path that tracks each
+///    percentile's real band (see `MonteCarloSummary::percentile_runs`)
 ///
 /// Supports convergence-based stopping via `config.convergence`.
 pub fn monte_carlo_simulate_with_config(

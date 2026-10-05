@@ -124,7 +124,7 @@ function ResultsContent({
   loading: boolean;
   error: string | undefined;
   /**
-   * Requested nominal-terminal rank. The loaded ResultsData owns the actual
+   * Requested band. The loaded ResultsData owns the actual
    * path ID/label until a replacement arrives; changing this starts a fetch.
    */
   percentile: Percentile;

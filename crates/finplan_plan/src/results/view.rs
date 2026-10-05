@@ -36,8 +36,10 @@ pub struct PercentileValue {
     pub final_net_worth: f64,
 }
 
-/// A representative path ranked by terminal NOMINAL net worth, not a
-/// pointwise quantile. Null percentile is the synthetic nominal mean, which
+/// A representative path: one real iteration whose real-wealth rank tracks its
+/// percentile's band across the horizon (runs made before that were ranked by
+/// terminal nominal net worth). Not a pointwise quantile, and its terminal
+/// value need not equal the stats' percentile value. Null percentile is the synthetic nominal mean, which
 /// has no coherent ledger and must not be deflated using mean inflation.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]

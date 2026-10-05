@@ -844,8 +844,12 @@ pub struct RealNetWorthSummary {
 pub struct MonteCarloSummary {
     /// Aggregate statistics
     pub stats: MonteCarloStats,
-    /// Representative paths ranked by terminal NOMINAL net worth, using
-    /// floor(N * p), capped at N - 1. Not pointwise or real-wealth quantiles.
+    /// One real path per percentile: the iteration whose real-wealth rank
+    /// stays closest to `p` across the whole grid (least squares), so it
+    /// tracks that band rather than merely ending at it. Its terminal value
+    /// is generally not `stats.percentile_values`, which stay exact. A summary
+    /// without real quantiles falls back to the terminal NOMINAL rank,
+    /// floor(N * p), capped at N - 1.
     pub percentile_runs: Vec<(f64, SimulationResult)>,
     /// Absent on summaries produced before real quantiles were measured.
     #[serde(default)]

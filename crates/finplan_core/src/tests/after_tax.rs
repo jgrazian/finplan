@@ -9,8 +9,8 @@ use crate::config::{
     AccountBuilder, AssetBuilder, DEFAULT_DEFERRED_TAX_RATE, EventBuilder, SimulationBuilder,
     SimulationConfig, SimulationMetadata,
 };
-use crate::model::{EventId, MonteCarloConfig, ReturnProfile, final_net_worth};
-use crate::simulation::{monte_carlo_simulate_with_config, simulate};
+use crate::model::{EventId, MonteCarloConfig, MonteCarloProgress, ReturnProfile, final_net_worth};
+use crate::simulation::{monte_carlo_simulate_with_config, monte_carlo_stats_only, simulate};
 
 /// Checking, a brokerage, a Roth and a loan; with `deferred`, a 401(k) too.
 /// Flat prices and no inflation, so every balance ends where it starts.
@@ -92,7 +92,9 @@ fn monte_carlo_ranks_after_tax_values_on_their_own() {
     let (config, meta) = plan(true, volatile);
     let summary = monte_carlo_simulate_with_config(&config, &mc).unwrap();
     assert_eq!(summary.stats.after_tax_percentile_values.len(), 3);
-    let median = summary.get_percentile(0.5).unwrap();
+    // The path that ends at the median, not the drawn one that tracks its band.
+    let (_, seeds) = monte_carlo_stats_only(&config, &mc, &MonteCarloProgress::new()).unwrap();
+    let median = &simulate(&config, seeds[1].1).unwrap();
     let deferred = median
         .final_account_balance(meta.account_id("401k").unwrap())
         .unwrap();

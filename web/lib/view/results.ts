@@ -1,4 +1,5 @@
-/** Independent pointwise real quantiles plus ONE nominal-terminal-ranked path.
+/** Independent pointwise real quantiles plus ONE representative path (the
+ * iteration whose real rank tracks its band; older runs: nominal-terminal-ranked).
  * Only path details are deflated here; the engine aggregates real observations
  * before computing the envelope/terminal stats. Never divide nominal aggregates
  * by a representative (or averaged) inflation path.

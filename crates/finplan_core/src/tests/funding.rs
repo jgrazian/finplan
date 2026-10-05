@@ -285,10 +285,13 @@ fn funding_counts_all_iterations_and_matches_replayed_paths() {
     let mut mc_config = mc();
     mc_config.percentiles = (0..16).map(|i| f64::from(i) / 16.0).collect();
     let summary = monte_carlo_simulate_with_config(&config, &mc_config).unwrap();
-    let funded = summary
-        .percentile_runs
+    // One terminal-ranked seed per iteration: the drawn paths track bands and
+    // may repeat, so replay the iterations themselves.
+    let (_, seeds) =
+        monte_carlo_stats_only(&config, &mc_config, &MonteCarloProgress::new()).unwrap();
+    let funded = seeds
         .iter()
-        .filter(|(_, r)| r.warnings.is_empty())
+        .filter(|(_, seed)| simulate(&config, *seed).unwrap().warnings.is_empty())
         .count();
     assert!(funded > 0 && funded < 16);
     assert_eq!(
