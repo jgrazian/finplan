@@ -32,6 +32,33 @@ pub fn calculate_federal_tax(income: f64, brackets: &[TaxBracket]) -> f64 {
     tax
 }
 
+/// The federal brackets for one tax year, over gross ordinary income: the
+/// `deduction` (the standard deduction, plus its 65+ extra from the year the
+/// filer turns 65) folded in as a 0% band, then every threshold scaled by
+/// `factor`, the path's cumulative inflation through the end of the prior
+/// year. This is how the engine indexes each year's brackets, so a reader of
+/// a stored run can rebuild them from the plan's tax config and the run's
+/// inflation.
+#[must_use]
+pub fn indexed_brackets(base: &[TaxBracket], deduction: f64, factor: f64) -> Vec<TaxBracket> {
+    let mut brackets = TaxConfig::brackets_with_deduction(base, deduction);
+    for bracket in &mut brackets {
+        bracket.threshold *= factor;
+    }
+    brackets
+}
+
+/// The federal rate the next dollar of ordinary income is taxed at, with
+/// `income` already earned this year.
+#[must_use]
+pub fn marginal_rate(income: f64, brackets: &[TaxBracket]) -> f64 {
+    brackets
+        .iter()
+        .take_while(|bracket| bracket.threshold <= income.max(0.0))
+        .last()
+        .map_or(0.0, |bracket| bracket.rate)
+}
+
 /// Calculate marginal tax on additional income given existing YTD income
 /// This is useful for calculating tax on a withdrawal when there's already
 /// been taxable income earlier in the year

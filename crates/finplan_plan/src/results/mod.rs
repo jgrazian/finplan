@@ -134,6 +134,12 @@ pub struct PathResults {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunResults {
     pub stats: Stats,
+    /// The median after-tax ending balance over every iteration, nominal
+    /// (`SimulationConfig::after_tax_final_net_worth`). None when the run did
+    /// not ask for the median percentile, and for runs stored before it was
+    /// kept. Not served with the results: previews compare against it.
+    #[serde(default)]
+    pub after_tax_final: Option<f64>,
     pub real_net_worth: Option<RealNetWorthSummary>,
     pub funding_diagnostics: Option<FundingDiagnostics>,
     /// The plan's accounts in display order (their sort order, then id).
@@ -162,6 +168,22 @@ fn lifetime_taxes(result: &SimulationResult) -> f64 {
         .sum()
 }
 
+/// Lifetime tax, early-withdrawal penalties included, on the stored path
+/// nearest the median: a real path's taxes, since a mean of paths' taxes is
+/// not attributable to any run. None when the run stored no paths.
+pub fn median_lifetime_taxes(summary: &MonteCarloSummary) -> Option<f64> {
+    summary
+        .percentile_runs
+        .iter()
+        .min_by(|a, b| {
+            (a.0 - 0.5)
+                .abs()
+                .partial_cmp(&(b.0 - 0.5).abs())
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .map(|(_, result)| lifetime_taxes(result))
+}
+
 /// Shape a finished Monte Carlo run: the same figures the server stores and
 /// serves, keyed by database ids through `compiled`.
 #[must_use]
@@ -172,19 +194,7 @@ pub fn project(
 ) -> RunResults {
     let stats = &summary.stats;
 
-    // Lifetime taxes are reported from the median path when it is available,
-    // since a mean-of-paths tax figure is not attributable to any real run.
-    let median_taxes = summary
-        .percentile_runs
-        .iter()
-        .min_by(|a, b| {
-            (a.0 - 0.5)
-                .abs()
-                .partial_cmp(&(b.0 - 0.5).abs())
-                .unwrap_or(std::cmp::Ordering::Equal)
-        })
-        .map(|(_, result)| lifetime_taxes(result))
-        .unwrap_or(0.0);
+    let median_taxes = median_lifetime_taxes(summary).unwrap_or(0.0);
 
     // One value per percentile, the last one given winning, ascending.
     let mut percentile_values: Vec<PercentileValue> = Vec::new();
@@ -262,6 +272,7 @@ pub fn project(
     }
 
     RunResults {
+        after_tax_final: stats.after_tax_percentile(0.5),
         stats: Stats {
             num_iterations: stats.num_iterations as i64,
             success_rate: stats.success_rate,
@@ -570,20 +581,22 @@ impl RunResults {
                 flows.sort_by_key(|flow| flow.year);
                 flows
                     .into_iter()
-                    .map(|flow| CashFlow {
-                        year: flow.year,
-                        income: flow.income,
-                        expenses: flow.expenses,
-                        contributions: flow.contributions,
-                        withdrawals: flow.withdrawals,
-                        appreciation: flow.appreciation,
-                        net_cash_flow: flow.net_cash_flow,
-                        taxes: path
-                            .taxes
-                            .iter()
-                            .find(|tax| tax.year == flow.year)
-                            .map(|tax| tax.total_tax + tax.early_withdrawal_penalties)
-                            .unwrap_or(0.0),
+                    .map(|flow| {
+                        let tax = path.taxes.iter().find(|tax| tax.year == flow.year);
+                        CashFlow {
+                            year: flow.year,
+                            income: flow.income,
+                            expenses: flow.expenses,
+                            contributions: flow.contributions,
+                            withdrawals: flow.withdrawals,
+                            appreciation: flow.appreciation,
+                            net_cash_flow: flow.net_cash_flow,
+                            taxes: tax
+                                .map_or(0.0, |tax| tax.total_tax + tax.early_withdrawal_penalties),
+                            ordinary_income: tax.map_or(0.0, |tax| tax.ordinary_income),
+                            early_withdrawal_penalties: tax
+                                .map_or(0.0, |tax| tax.early_withdrawal_penalties),
+                        }
                     })
                     .collect()
             })

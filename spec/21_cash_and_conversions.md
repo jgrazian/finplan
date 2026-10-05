@@ -345,6 +345,11 @@ New, from this spec and spec 20:
 - *Materiality* is measured on after-tax ending balance and lifetime tax (Part
   3), not success rate: a conversion often leaves success unchanged and still
   saves a great deal. The preview tool reports both.
+- *As built*: the rule writes the note itself, facts and the 12% / 22%
+  template paths included, so a review without the model still shows it; the
+  reviewer reads it as ran. Preview stats carry `after_tax_final` (median,
+  nominal) and `lifetime_taxes` (median path, nominal), and the materiality
+  floor counts either one moving by the median's floor.
 
 **`cash_accumulates`** (Rule; portfolio; fix). Extends `idle_bank_cash`.
 - *Fires when*, on the shown path, cash (bank, or uninvested cash in an
@@ -374,7 +379,11 @@ is spent but sits uninvested. Offers retargeting the RMD to the bank, or adding
 **`early_withdrawal_penalties`** (Reviewer; plan; fix). The shown path pays
 early-withdrawal penalties above a threshold (for example 1% of lifetime
 spending). Paths: Penalty-aware withdrawal order (spec 20 funding policy), or a
-conversion ladder started five years before the penalized withdrawals.
+conversion ladder started five years before the penalized withdrawals. The
+reviewer reads the penalties by year from the run's lifetime tax line (and
+`inspect_path`). A change cannot set the funding policy, so the
+penalty-aware path changes the sweeps that pay for spending; where the policy
+is what sells, the note names it.
 
 ### Templates added
 

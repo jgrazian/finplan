@@ -1469,8 +1469,10 @@ pub fn strategy_sources(
 /// The ordinary income at which the marginal rate first exceeds
 /// `ceiling_rate`: the top of the highest bracket taxed at or below it.
 /// Unbounded when no bracket is taxed above the ceiling. The brackets are
-/// the year's indexed ones, standard deduction folded in as a 0% band.
-pub(crate) fn bracket_ceiling(brackets: &[crate::model::TaxBracket], ceiling_rate: f64) -> f64 {
+/// the year's indexed ones, standard deduction folded in as a 0% band
+/// ([`crate::taxes::indexed_brackets`]).
+#[must_use]
+pub fn bracket_ceiling(brackets: &[crate::model::TaxBracket], ceiling_rate: f64) -> f64 {
     brackets
         .iter()
         .find(|bracket| bracket.rate > ceiling_rate + 1e-9)

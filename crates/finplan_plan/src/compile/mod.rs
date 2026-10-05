@@ -419,43 +419,7 @@ pub fn compile(graph: &ScenarioGraph) -> PlanResult<CompiledScenario> {
         None => InflationProfile::default(),
     };
 
-    let tax_config = match &graph.tax_config {
-        Some(cfg) => {
-            let federal_brackets: Vec<TaxBracket> = graph
-                .tax_brackets
-                .iter()
-                .map(|b| TaxBracket {
-                    threshold: b.threshold,
-                    rate: b.rate,
-                })
-                .collect();
-
-            // The engine walks brackets assuming ascending thresholds starting
-            // at zero; an empty or gapped set would silently under-tax.
-            if federal_brackets.is_empty() {
-                return Err(PlanError::unprocessable(format!(
-                    "tax config '{}' has no federal brackets",
-                    cfg.name
-                )));
-            }
-            if federal_brackets[0].threshold != 0.0 {
-                return Err(PlanError::unprocessable(format!(
-                    "tax config '{}' must have a bracket starting at 0",
-                    cfg.name
-                )));
-            }
-
-            TaxConfig {
-                federal_brackets,
-                state_rate: cfg.state_rate,
-                capital_gains_rate: cfg.capital_gains_rate,
-                early_withdrawal_penalty_rate: cfg.early_withdrawal_penalty_rate,
-                standard_deduction: cfg.standard_deduction,
-                age_65_extra_deduction: cfg.age_65_extra_deduction,
-            }
-        }
-        None => TaxConfig::default(),
-    };
+    let tax_config = tax_config(graph)?;
 
     // An Age trigger or an RMD effect without a birth date can never resolve, so
     // reject it here rather than letting the engine emit warnings for 30 years.
@@ -502,6 +466,49 @@ pub fn compile(graph: &ScenarioGraph) -> PlanResult<CompiledScenario> {
         metadata,
         account_names,
         event_names,
+    })
+}
+
+/// The plan's tax config as the engine takes it: its federal brackets as
+/// configured (before any deduction or indexing), or the engine's default
+/// when the plan has none.
+pub fn tax_config(graph: &ScenarioGraph) -> PlanResult<TaxConfig> {
+    Ok(match &graph.tax_config {
+        Some(cfg) => {
+            let federal_brackets: Vec<TaxBracket> = graph
+                .tax_brackets
+                .iter()
+                .map(|b| TaxBracket {
+                    threshold: b.threshold,
+                    rate: b.rate,
+                })
+                .collect();
+
+            // The engine walks brackets assuming ascending thresholds starting
+            // at zero; an empty or gapped set would silently under-tax.
+            if federal_brackets.is_empty() {
+                return Err(PlanError::unprocessable(format!(
+                    "tax config '{}' has no federal brackets",
+                    cfg.name
+                )));
+            }
+            if federal_brackets[0].threshold != 0.0 {
+                return Err(PlanError::unprocessable(format!(
+                    "tax config '{}' must have a bracket starting at 0",
+                    cfg.name
+                )));
+            }
+
+            TaxConfig {
+                federal_brackets,
+                state_rate: cfg.state_rate,
+                capital_gains_rate: cfg.capital_gains_rate,
+                early_withdrawal_penalty_rate: cfg.early_withdrawal_penalty_rate,
+                standard_deduction: cfg.standard_deduction,
+                age_65_extra_deduction: cfg.age_65_extra_deduction,
+            }
+        }
+        None => TaxConfig::default(),
     })
 }
 

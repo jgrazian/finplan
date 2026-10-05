@@ -64,6 +64,7 @@ const RULE_TOPIC: Record<string, string> = {
   liability_payment_inflation_adjusted: "loan payment",
   rmd_missing: "RMDs",
   rmd_into_investment_cash: "where RMDs land",
+  roth_conversion_opportunity: "Roth conversions",
   unmapped_or_mismatched_assets: "return assumption",
   shortfall_account_concentration: "where it fails",
   success_vs_funding_gap: "success vs funding",
@@ -1136,8 +1137,10 @@ export function deltaLine(path: Pick<SuggestionPath, "check" | "estimate">): str
 
 /**
  * A path's result figure by figure: the rate it quotes, success beside it,
- * the 5th-percentile real final net worth and the median first shortfall
- * where both sides measured them. An estimate gives its rates alone.
+ * the 5th-percentile real final net worth, the median first shortfall, and
+ * the after-tax ending balance and lifetime tax (what a tax change such as a
+ * Roth conversion moves, where success does not) where both sides measured
+ * them. An estimate gives its rates alone.
  */
 export function pathMetrics(path: Pick<SuggestionPath, "check" | "estimate">): Metric[] | undefined {
   const { check, estimate } = path;
@@ -1159,6 +1162,12 @@ export function pathMetrics(path: Pick<SuggestionPath, "check" | "estimate">): M
         from: was != null ? String(was) : "none",
         to: now != null ? String(now) : "none",
       });
+    }
+    if (base.after_tax_final != null && edited.after_tax_final != null) {
+      out.push({ label: "After-tax ending", from: fmtCompact(base.after_tax_final), to: fmtCompact(edited.after_tax_final) });
+    }
+    if (base.lifetime_taxes != null && edited.lifetime_taxes != null) {
+      out.push({ label: "Lifetime tax", from: fmtCompact(base.lifetime_taxes), to: fmtCompact(edited.lifetime_taxes) });
     }
     return out;
   }

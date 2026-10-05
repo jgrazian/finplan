@@ -202,6 +202,10 @@ const RULES: &[(&str, Rule)] = &[
     ("rmd_missing", plan::rmd_missing),
     ("rmd_into_investment_cash", plan::rmd_into_investment_cash),
     (
+        "roth_conversion_opportunity",
+        plan::roth_conversion_opportunity,
+    ),
+    (
         "shortfall_account_concentration",
         results::shortfall_account_concentration,
     ),

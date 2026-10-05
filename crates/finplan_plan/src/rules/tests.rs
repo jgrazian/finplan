@@ -152,6 +152,8 @@ fn results() -> Results {
                 appreciation: 0.0,
                 net_cash_flow: 0.0,
                 taxes: 0.0,
+                ordinary_income: 0.0,
+                early_withdrawal_penalties: 0.0,
             })
             .collect(),
         warnings: Vec::new(),
@@ -1242,6 +1244,288 @@ fn rmds_into_a_brokerage_build_up_uninvested_and_are_invested_in_place() {
         assert!(cash <= 2.2 * spent, "{year}: {cash} against {spent}");
     }
     assert!(!rules_of(&review(&fixed, &r)).contains_key("cash_accumulates"));
+}
+
+// ── roth_conversion_opportunity ─────────────────────────────────────────────
+
+/// Retired at 46 when the plan starts in 2026 (born 1980, RMDs from 75 in
+/// 2055): $90k a year of spending comes from a $3M brokerage by
+/// tax-efficient sales, so ordinary income is nil for decades, while a $2M
+/// 401(k) compounds untouched until its RMDs, paid into Checking, land in the
+/// top brackets. `roth` adds a small Roth IRA; `k401` sizes the 401(k), and
+/// `years` the plan.
+fn conversion_plan(roth: bool, k401: f64, years: i64) -> ScenarioGraph {
+    use crate::templates::{
+        RecurringExpenseParams, Template, allocation_asset, bank_account, expand_template,
+        investment_account, position,
+    };
+    let mut g = crate::templates::tests::blank_graph();
+    g.scenario.birth_date = Some("1980-01-01".into());
+    g.scenario.duration_years = years;
+    let profile = RowRef::Id(*g.return_profiles.keys().min().unwrap());
+    let mut changes = vec![
+        bank_account("checking", "Checking", 100e3, profile.clone(), None),
+        allocation_asset("fund", "Fund", profile.clone(), None),
+        investment_account(
+            "k401",
+            "401(k)",
+            "TaxDeferred",
+            profile.clone(),
+            None,
+            vec![position(&RowRef::new("fund"), k401, k401)],
+        ),
+        investment_account(
+            "brokerage",
+            "Brokerage",
+            "Taxable",
+            profile.clone(),
+            None,
+            vec![position(&RowRef::new("fund"), 3e6, 2e6)],
+        ),
+    ];
+    if roth {
+        changes.push(investment_account(
+            "roth",
+            "Roth IRA",
+            "TaxFree",
+            profile,
+            None,
+            vec![position(&RowRef::new("fund"), 50e3, 50e3)],
+        ));
+    }
+    let spending = Template::RecurringExpense(RecurringExpenseParams {
+        name: "Spending".into(),
+        from_account_id: RowRef::new("checking"),
+        amount: 90e3,
+        amount_parameter: None,
+        parameter_interval: None,
+        interval: None,
+        inflation_adjusted: None,
+        start: None,
+        end: None,
+        fund_from_investments: true,
+        sort_order: None,
+    });
+    changes.extend(expand_template("", &spending).unwrap().changes);
+    changes.push(Change {
+        op: ChangeOp::Add,
+        target: ChangeTarget::NewEvent("rmd".into()),
+        path: String::new(),
+        expect: None,
+        value: Some(json!({
+            "name": "RMD",
+            "trigger": {"kind": "Repeating", "interval": "Yearly",
+                        "start_condition": {"kind": "Age", "years": 75}},
+            "effects": [{"kind": "ApplyRmd", "to_account_id": {"$new": "checking"}}],
+        })),
+    });
+    crate::suggest::resolve_steps(&g, &[changes], &Default::default())
+        .unwrap()
+        .unwrap()
+        .graph
+}
+
+fn account_id(g: &ScenarioGraph, name: &str) -> i64 {
+    g.accounts.iter().find(|a| a.name == name).unwrap().id
+}
+
+fn stat(d: &Draft, name: &str) -> f64 {
+    d.evidence
+        .iter()
+        .find_map(|e| match e {
+            Evidence::Stat { name: n, value } if n == name => Some(*value),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("no stat {name:?} in {:#?}", d.evidence))
+}
+
+#[test]
+fn a_large_401k_left_for_rmds_is_pointed_at_roth_conversions() {
+    let g = conversion_plan(true, 2e6, 40);
+    let r = run(&g);
+    let drafts = review(&g, &r);
+    let d = only(&drafts, "roth_conversion_opportunity");
+    assert_catalogued(&drafts);
+    assert_changes_resolve(&g, &drafts);
+    let (k401, roth, brokerage) = (
+        account_id(&g, "401(k)"),
+        account_id(&g, "Roth IRA"),
+        account_id(&g, "Brokerage"),
+    );
+
+    // The facts: the room below the top of the 22% bracket (where 24% starts)
+    // in each full year before RMDs, figured as the engine would (no standard
+    // deduction in this tax config, thresholds indexed by the path's
+    // inflation).
+    assert!(
+        d.title.starts_with("401(k)'s RMDs from 2055 ("),
+        "{}",
+        d.title
+    );
+    assert_eq!(stat(d, "first RMD year"), 2055.0);
+    let flow = |year: i64| r.cash_flows.iter().find(|c| c.year == year).unwrap();
+    let factor = |year: i64| r.inflation.iter().find(|p| p.year == year).unwrap().factor;
+    for year in [2027, 2040, 2054] {
+        let room = 100_525.0 * factor(year) - flow(year).ordinary_income;
+        assert!(
+            (stat(d, &format!("room below the top of the 22% bracket {year}")) - room.round())
+                .abs()
+                <= 1.0,
+            "{year}"
+        );
+    }
+    assert!(
+        !d.evidence
+            .iter()
+            .any(|e| matches!(e, Evidence::Stat { name, .. }
+            if name == "room below the top of the 22% bracket 2026")),
+        "the partial first year is left out"
+    );
+    // The first RMD: the 401(k)'s balance at the end of 2054 over the IRS
+    // divisor at 75 (24.6), and RMDs that outrun spending at a top rate.
+    let end_2054 = ctx_year_end(&g, &r, k401, 2054);
+    assert!((stat(d, "RMD 2055 (estimated)") - (end_2054 / 24.6).round()).abs() <= 1.0);
+    assert!(stat(d, "RMDs beyond spending 2055-2066") > 0.0);
+    assert!(stat(d, "marginal rate 2027-2054") <= 0.22);
+    assert!(
+        d.evidence
+            .iter()
+            .any(|e| matches!(e, Evidence::Stat { name, value }
+                if name.starts_with("marginal rate 20") && !name.contains('-') && *value > 0.22)),
+        "{:#?}",
+        d.evidence
+    );
+    assert!(d.evidence.contains(&Evidence::AccountSeries {
+        account_id: k401,
+        date: "2054-12-31".into(),
+        value: end_2054,
+    }));
+    // Retired at 47 in the first full year: the conversions are a ladder too.
+    assert!(
+        d.reasoning
+            .starts_with("On the median path, the years 2027-2054 leave ordinary income"),
+        "{}",
+        d.reasoning
+    );
+    assert!(d.reasoning.contains("before 59½"), "{}", d.reasoning);
+    assert!(d.reasoning.contains("after-tax ending balance"));
+
+    // The courses: up to 12% and up to 22%, the 22% recommended since the
+    // RMD years are taxed above it, each a yearly Dec 30 conversion from the
+    // first full year until the year before RMDs, tax paid from Brokerage.
+    let keys: Vec<_> = d.paths.iter().map(|p| (p.key, p.recommended)).collect();
+    assert_eq!(keys, [("12", false), ("22", true)]);
+    for (path, rate) in d.paths.iter().zip(["12%", "22%"]) {
+        assert_eq!(
+            path.label,
+            format!("Convert 401(k) each year up to the {rate} bracket")
+        );
+        let [step] = path.steps.as_slice() else {
+            panic!("one step");
+        };
+        let [change] = step.changes.as_slice() else {
+            panic!("one change");
+        };
+        let body = change.value.as_ref().unwrap();
+        assert_eq!(
+            body["trigger"]["start_condition"],
+            json!({"kind": "Date", "on_date": "2027-12-30"})
+        );
+        assert_eq!(
+            body["trigger"]["end_condition"],
+            json!({"kind": "Age", "years": 75})
+        );
+        let effect = &body["effects"][0];
+        assert_eq!(effect["kind"], "RothConversion");
+        assert_eq!(effect["from_account_id"], k401);
+        assert_eq!(effect["to_account_id"], roth);
+        assert_eq!(effect["pay_tax_from_account_id"], brokerage);
+        assert_eq!(effect["amount"]["source"], format!("bracket_room({rate})"));
+    }
+
+    // Each path compiles, converts on the shown path, and quiets the rule.
+    for path in &d.paths {
+        let steps: Vec<Vec<Change>> = path.steps.iter().map(|s| s.changes.clone()).collect();
+        let fixed = crate::suggest::resolve_steps(&g, &steps, &Default::default())
+            .unwrap()
+            .unwrap()
+            .graph;
+        crate::compile::compile(&fixed).unwrap();
+        let r = run(&fixed);
+        let roth_end = ctx_year_end(&fixed, &r, roth, 2054);
+        assert!(
+            roth_end > ctx_year_end(&g, &run(&g), roth, 2054),
+            "{}: the Roth grows by the conversions",
+            path.key
+        );
+        assert!(
+            !rules_of(&review(&fixed, &r)).contains_key("roth_conversion_opportunity"),
+            "{}",
+            path.key
+        );
+    }
+}
+
+/// A balance at the end of `year` on the shown path of `r`.
+fn ctx_year_end(g: &ScenarioGraph, r: &Results, account: i64, year: i64) -> f64 {
+    Ctx::new(g, r).year_end(account, year).unwrap()
+}
+
+#[test]
+fn a_plan_with_no_roth_opens_one_first() {
+    let g = conversion_plan(false, 2e6, 40);
+    let r = run(&g);
+    let drafts = review(&g, &r);
+    let d = only(&drafts, "roth_conversion_opportunity");
+    assert_changes_resolve(&g, &drafts);
+    assert!(d.reasoning.contains("no Roth account"), "{}", d.reasoning);
+    for path in &d.paths {
+        let [open, convert] = path.steps.as_slice() else {
+            panic!("two steps");
+        };
+        assert_eq!(open.title, "Open a Roth IRA to convert into");
+        let [account] = open.changes.as_slice() else {
+            panic!("one change");
+        };
+        assert_eq!(account.target, ChangeTarget::NewAccount("roth".into()));
+        assert_eq!(account.value.as_ref().unwrap()["tax_status"], "TaxFree");
+        assert_eq!(
+            convert.changes[0].value.as_ref().unwrap()["effects"][0]["to_account_id"],
+            json!({"$new": "roth"})
+        );
+        let steps: Vec<Vec<Change>> = path.steps.iter().map(|s| s.changes.clone()).collect();
+        let fixed = crate::suggest::resolve_steps(&g, &steps, &Default::default())
+            .unwrap()
+            .unwrap()
+            .graph;
+        crate::compile::compile(&fixed).unwrap();
+    }
+}
+
+#[test]
+fn roth_conversion_opportunity_stays_quiet_where_it_should() {
+    // The fixture's shown path holds nothing in the 401(k).
+    assert!(!rules_of(&review(&graph(), &results())).contains_key("roth_conversion_opportunity"));
+
+    // No tax-deferred money.
+    let g = conversion_plan(true, 0.0, 40);
+    assert!(!rules_of(&review(&g, &run(&g))).contains_key("roth_conversion_opportunity"));
+
+    // RMDs (2055) fall after the plan ends (2051).
+    let g = conversion_plan(true, 2e6, 25);
+    assert!(!rules_of(&review(&g, &run(&g))).contains_key("roth_conversion_opportunity"));
+
+    // A conversion event already exists, even one that converts little.
+    let mut g = conversion_plan(true, 2e6, 40);
+    let (k401, roth) = (account_id(&g, "401(k)"), account_id(&g, "Roth IRA"));
+    add_event(
+        &mut g,
+        json!({"name": "Convert", "trigger": {"kind": "Repeating", "interval": "Yearly"},
+               "effects": [{"kind": "RothConversion", "from_account_id": k401,
+                            "to_account_id": roth,
+                            "amount": {"kind": "Fixed", "value": 1000.0}}]}),
+    );
+    assert!(!rules_of(&review(&g, &run(&g))).contains_key("roth_conversion_opportunity"));
 }
 
 // ── the catalogue ───────────────────────────────────────────────────────────

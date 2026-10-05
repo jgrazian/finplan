@@ -765,6 +765,20 @@ test("a checked path reads as from → to figures, an estimate as its rates alon
     { label: "Success", from: "97.9%", to: "98.6%" },
     { label: "P5 real final", from: "$2.08M", to: "$2.84M" },
   ]);
+  // A Roth conversion's check: the after-tax ending balance and lifetime tax.
+  const converted = {
+    check: {
+      iterations: 400,
+      paired: true,
+      base: { ...base, after_tax_final: 6_100_000, lifetime_taxes: 2_400_000 },
+      edited: { ...edited, after_tax_final: 6_650_000, lifetime_taxes: 1_900_000 },
+    },
+    estimate: null,
+  };
+  assert.deepEqual(pathMetrics(converted as never)?.slice(3), [
+    { label: "After-tax ending", from: "$6.10M", to: "$6.65M" },
+    { label: "Lifetime tax", from: "$2.40M", to: "$1.90M" },
+  ]);
   const estimated = { check: null, estimate: { success_rate: null, funding_success_rate: 0.93 } };
   assert.equal(deltaLine(estimated), "est. funding ~93.0%");
   assert.deepEqual(pathMetrics(estimated), [{ label: "Funding", to: "~93.0%", estimate: true }]);

@@ -31,6 +31,17 @@ pub struct PreviewStats {
     /// Final net worth in today's dollars, over all iterations.
     pub real_final: Option<RealFinal>,
     pub funding: Option<FundingDiagnostics>,
+    /// The median after-tax ending balance over all iterations, nominal:
+    /// tax-deferred balances count at one minus the plan's deferred tax rate.
+    /// What a Roth conversion is judged on, where success rarely moves.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub after_tax_final: Option<f64>,
+    /// Lifetime tax, early-withdrawal penalties included, on the median path,
+    /// nominal.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub lifetime_taxes: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]

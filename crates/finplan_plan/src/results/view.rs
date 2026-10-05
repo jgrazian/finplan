@@ -140,7 +140,15 @@ pub struct CashFlow {
     pub withdrawals: f64,
     pub appreciation: f64,
     pub net_cash_flow: f64,
+    /// Income tax and early-withdrawal penalties.
     pub taxes: f64,
+    /// The ordinary income the year's income tax was figured on: taxable
+    /// income, tax-deferred withdrawals and Roth conversions, gross.
+    #[serde(default)]
+    pub ordinary_income: f64,
+    /// Early-withdrawal penalties paid this year, part of `taxes`.
+    #[serde(default)]
+    pub early_withdrawal_penalties: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]

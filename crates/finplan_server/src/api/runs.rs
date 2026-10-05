@@ -487,8 +487,8 @@ pub(crate) async fn results(
     .fetch_all(&state.db)
     .await?;
 
-    let tax_rows: Vec<(i64, f64, f64)> = sqlx::query_as(
-        "SELECT year, total_tax, early_withdrawal_penalties
+    let tax_rows: Vec<(i64, f64, f64, f64)> = sqlx::query_as(
+        "SELECT year, total_tax, early_withdrawal_penalties, ordinary_income
            FROM run_taxes WHERE run_id = ?1 AND percentile IS ?2 ORDER BY year",
     )
     .bind(id)
@@ -500,11 +500,12 @@ pub(crate) async fn results(
         .into_iter()
         .map(
             |(year, income, expenses, contributions, withdrawals, appreciation, net_cash_flow)| {
-                let taxes = tax_rows
+                let (total, penalties, ordinary_income) = tax_rows
                     .iter()
-                    .find(|(y, _, _)| *y == year)
-                    .map(|(_, total, penalties)| total + penalties)
-                    .unwrap_or(0.0);
+                    .find(|(y, ..)| *y == year)
+                    .map_or((0.0, 0.0, 0.0), |(_, total, penalties, ordinary)| {
+                        (*total, *penalties, *ordinary)
+                    });
                 CashFlow {
                     year,
                     income,
@@ -513,7 +514,9 @@ pub(crate) async fn results(
                     withdrawals,
                     appreciation,
                     net_cash_flow,
-                    taxes,
+                    taxes: total + penalties,
+                    ordinary_income,
+                    early_withdrawal_penalties: penalties,
                 }
             },
         )

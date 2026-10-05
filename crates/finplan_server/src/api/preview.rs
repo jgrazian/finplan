@@ -42,6 +42,7 @@ use finplan_plan::graph::{
     TaxConfigEntry, TaxConfigRow,
 };
 use finplan_plan::results::funding::{FundingDiagnostics, funding_view};
+use finplan_plan::results::median_lifetime_taxes;
 use finplan_plan::snapshot::MODEL_VERSION;
 use finplan_plan::suggest::{
     self, Change, ChangeProblem, ChangeTarget, Created, DiffLine, Names, Resolved,
@@ -221,9 +222,10 @@ pub(crate) async fn run_preview(
         .map_or(UNSEEDED_BASE ^ run.id as u64, |seed| seed as u64);
     let mc_config = MonteCarloConfig {
         iterations,
-        // Stats, real quantiles and funding diagnostics come from every
-        // iteration; representative paths and the mean path are not shown.
-        percentiles: Vec::new(),
+        // Stats, real quantiles, funding diagnostics and the after-tax
+        // median come from every iteration; of the paths, only the median is
+        // kept, for its lifetime tax.
+        percentiles: vec![0.5],
         compute_mean: false,
         convergence: None,
         batch_size: run.batch_size as usize,
@@ -474,7 +476,7 @@ async fn simulate_unpaired(
 ) -> ApiResult<PreviewStats> {
     let mc_config = MonteCarloConfig {
         iterations,
-        percentiles: Vec::new(),
+        percentiles: vec![0.5],
         compute_mean: false,
         convergence: None,
         batch_size: 100,
@@ -753,14 +755,19 @@ fn market_inputs(config: &SimulationConfig) -> Vec<String> {
 /// runs lose their real quantiles; runs from before funding diagnostics lack
 /// those. Either way the base is then simulated alongside the edit.
 async fn stored_stats(db: &Db, run_id: i64) -> ApiResult<Option<PreviewStats>> {
-    let row: Option<(f64, Option<f64>, Option<String>)> = sqlx::query_as(
-        "SELECT success_rate, funding_success_rate, funding_diagnostics
+    type Row = (f64, Option<f64>, Option<String>, f64, Option<f64>);
+    let row: Option<Row> = sqlx::query_as(
+        "SELECT success_rate, funding_success_rate, funding_diagnostics, lifetime_taxes,
+                after_tax_final
            FROM run_stats WHERE run_id = ?1",
     )
     .bind(run_id)
     .fetch_optional(db)
     .await?;
-    let Some((success_rate, funding_success_rate, Some(funding))) = row else {
+    // A run stored before the after-tax median was kept is simulated again.
+    let Some((success_rate, funding_success_rate, Some(funding), lifetime_taxes, Some(after_tax))) =
+        row
+    else {
         return Ok(None);
     };
     let Ok(funding) = serde_json::from_str::<FundingDiagnostics>(&funding) else {
@@ -781,6 +788,8 @@ async fn stored_stats(db: &Db, run_id: i64) -> ApiResult<Option<PreviewStats>> {
         funding_success_rate,
         real_final,
         funding: Some(funding),
+        after_tax_final: Some(after_tax),
+        lifetime_taxes: Some(lifetime_taxes),
     }))
 }
 
@@ -805,6 +814,8 @@ fn stats(compiled: &CompiledScenario, summary: &MonteCarloSummary) -> PreviewSta
             .funding
             .as_ref()
             .map(|funding| funding_view(&compiled.id_map, funding)),
+        after_tax_final: summary.stats.after_tax_percentile(0.5),
+        lifetime_taxes: median_lifetime_taxes(summary),
     }
 }
 

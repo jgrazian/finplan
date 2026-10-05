@@ -765,12 +765,8 @@ impl SimulationState {
         {
             deduction += config.age_65_extra_deduction;
         }
-        let mut brackets =
-            TaxConfig::brackets_with_deduction(&self.taxes.base_federal_brackets, deduction);
-        for bracket in &mut brackets {
-            bracket.threshold *= factor;
-        }
-        config.federal_brackets = brackets;
+        config.federal_brackets =
+            crate::taxes::indexed_brackets(&self.taxes.base_federal_brackets, deduction, factor);
     }
 
     /// Check if we've crossed into a new year and finalize previous year's taxes
