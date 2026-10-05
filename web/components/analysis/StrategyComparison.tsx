@@ -17,6 +17,7 @@ export function StrategyComparison({
   selectedKey,
   onSelect,
   basis,
+  conversion,
 }: {
   comparison: DrawdownComparison | undefined;
   loading: boolean;
@@ -24,6 +25,8 @@ export function StrategyComparison({
   selectedKey: string;
   onSelect: (key: string) => void;
   basis: DrawdownBasis;
+  /** The conversion toggle every row ran with, when it is not As planned. */
+  conversion?: string;
 }) {
   const lines = comparison ? comparisonLines(comparison, basis) : [];
   const best = (on: boolean) =>
@@ -32,7 +35,7 @@ export function StrategyComparison({
     <section aria-label="Strategy comparison" style={{ fontSize: 12.5 }}>
       <div style={{ color: MUTED, marginBottom: 6 }}>
         {comparison
-          ? `${comparison.iterations} markets each, same markets for every strategy`
+          ? `${comparison.iterations} markets each, same markets for every strategy${conversion ? ` · Roth conversions: ${conversion}` : ""}`
           : loading
             ? "Comparing strategies across simulated markets…"
             : (error ?? "")}

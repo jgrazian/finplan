@@ -4,6 +4,7 @@ use finplan_core::analysis::McRunner;
 use finplan_core::model::MonteCarloConfig;
 use finplan_core::simulation::simulate;
 
+use super::conversion::Conversions;
 use super::normalize::normalize;
 use super::retirement::resolve;
 use super::{CompareRequest, ComparisonRow, DrawdownComparison};
@@ -24,7 +25,7 @@ const PARALLEL_BATCHES: usize = 4;
 
 /// Run a Monte Carlo of `graph` per choice in `body.request`, all on
 /// [`ANALYSIS_SEED`] (common random numbers: differences come from the
-/// strategy, not from sampling noise).
+/// strategy and its conversion setting, not from sampling noise).
 ///
 /// Per strategy it reports success rates and the median final net worth, pre-
 /// and after-tax, plus the tax and real value on the median path (one more
@@ -46,6 +47,7 @@ pub fn compare(
     let mut base = None;
     let retirement = resolve(&compiled, request.retirement_year, ANALYSIS_SEED, &mut base)?;
     drop(base);
+    let conversions = Conversions::prepare(graph, &compiled, &retirement, &choices)?;
 
     let mc = MonteCarloConfig {
         iterations,
@@ -62,7 +64,8 @@ pub fn compare(
         if runner.cancelled() {
             return Err(AnalysisError::Cancelled);
         }
-        let (mut config, overlay) = normalize(&compiled.config, &choice, retirement.date)?;
+        let (from, conversion_overlay) = conversions.base(&compiled, &choice);
+        let (mut config, overlay) = normalize(&from.config, &choice, retirement.date)?;
         config.collect_ledger = false;
         let (stats, seeds) = runner.stats(&config, &mc)?;
         let median = stats
@@ -81,6 +84,7 @@ pub fn compare(
         rows.push(ComparisonRow {
             choice,
             overlay,
+            conversion_overlay,
             success_rate: stats.success_rate,
             funding_success_rate: stats.funding_success_rate,
             median_final_net_worth: median,

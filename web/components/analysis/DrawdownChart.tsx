@@ -4,6 +4,8 @@ import { useId, type KeyboardEvent } from "react";
 import { ChartCanvas, EventMarkers } from "@/components/charts";
 import { makeScale, barColumn, type ChartGeometry } from "@/components/charts/geometry";
 import {
+  CONVERSION_COLOR,
+  CONVERSION_TAX_STRIPES,
   SURPLUS_COLOR,
   TAX_STRIPES,
   axisLabel,
@@ -15,8 +17,10 @@ const MUTED = "color-mix(in srgb, var(--color-text) 60%, transparent)";
 /**
  * The stacked bars of Drawdown: one column per year, sources bottom-up, a
  * hatched cap for any shortfall up to the target line, and any surplus
- * (outlined) above it. The tax withheld on the sales hangs below zero.
- * Hover selects a year, click pins it.
+ * (outlined) above it. The tax withheld on the sales hangs below zero, and
+ * under it the tax on Roth conversions, in level bands. A converting year
+ * gets a hollow marker at the amount converted. Hover selects a year, click
+ * pins it.
  */
 export function DrawdownChart({
   view,
@@ -36,6 +40,7 @@ export function DrawdownChart({
   const id = useId().replace(/:/g, "");
   const hatch = `dd-hatch-${id}`;
   const stripes = `dd-tax-${id}`;
+  const bands = `dd-conversion-tax-${id}`;
   const geo: ChartGeometry = narrow
     ? { w: 560, h: 340, left: 52, right: 8, top: 8, bottom: 28 }
     : { w: 920, h: 380, left: 60, right: 12, top: 8, bottom: 28 };
@@ -79,7 +84,11 @@ export function DrawdownChart({
         onHoverChange={onHover}
         pinnedIndex={pinned}
         onSelect={(i) => onPin(i)}
-        zeroLabel="Above: what paid for spending. Below: tax withheld on withdrawals."
+        zeroLabel={
+          view.hasConversion
+            ? "Above: what paid for spending, and Roth conversions (hollow markers). Below: tax on withdrawals, then tax on conversions."
+            : "Above: what paid for spending. Below: tax withheld on withdrawals."
+        }
       >
         <defs>
           <pattern id={hatch} width={6} height={6} patternUnits="userSpaceOnUse" patternTransform="rotate(135)">
@@ -90,6 +99,11 @@ export function DrawdownChart({
           <pattern id={stripes} width={5} height={5} patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
             <rect width={5} height={5} fill="var(--color-danger)" fillOpacity={0.12} />
             <line x1={0} y1={0} x2={0} y2={5} stroke="var(--color-danger)" strokeOpacity={0.6} strokeWidth={2} />
+          </pattern>
+          {/* Level bands: tax all the same, but the conversion's, not the withdrawals'. */}
+          <pattern id={bands} width={4} height={4} patternUnits="userSpaceOnUse">
+            <rect width={4} height={4} fill="var(--color-danger)" fillOpacity={0.08} />
+            <line x1={0} y1={0.75} x2={4} y2={0.75} stroke="var(--color-danger)" strokeOpacity={0.55} strokeWidth={1.5} />
           </pattern>
         </defs>
         {active != null && (
@@ -141,6 +155,16 @@ export function DrawdownChart({
                   strokeWidth={1}
                 />
               )}
+              {c.conversionTax && (
+                <rect
+                  {...rect(c.conversionTax.from, c.conversionTax.to)}
+                  fill={`url(#${bands})`}
+                  stroke="var(--color-danger)"
+                  strokeOpacity={0.7}
+                  strokeWidth={1}
+                  strokeDasharray="1 1.5"
+                />
+              )}
               {c.surplus && (
                 <rect
                   {...rect(c.surplus.from, c.surplus.to)}
@@ -170,6 +194,23 @@ export function DrawdownChart({
               stroke="var(--color-text)"
               strokeWidth={1.5}
               strokeDasharray="3 2"
+              pointerEvents="none"
+            />
+          );
+        })}
+        {view.columns.map((c, i) => {
+          if (c.conversion == null) return null;
+          // Hollow: money moved between accounts, not spent.
+          const { x, w } = barColumn(i, scale);
+          return (
+            <circle
+              key={`conversion-${c.year}`}
+              cx={x + w / 2}
+              cy={scale.y(c.conversion)}
+              r={Math.max(2.5, Math.min(4.5, w / 2.5))}
+              fill="var(--color-raised)"
+              stroke={CONVERSION_COLOR}
+              strokeWidth={1.75}
               pointerEvents="none"
             />
           );
@@ -242,10 +283,25 @@ export function DrawdownLegend({ view }: { view: DrawdownView }) {
           Surplus (beyond need)
         </span>
       )}
+      {view.unit === "usd" && view.hasConversion && (
+        <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          {swatch({ borderRadius: 999, border: `1.75px solid ${CONVERSION_COLOR}`, boxSizing: "border-box" })}
+          Roth conversion
+        </span>
+      )}
       {tax && (
         <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
           {swatch({ background: TAX_STRIPES, border: "1px solid color-mix(in srgb, var(--color-danger) 70%, transparent)" })}
           {tax.name}
+        </span>
+      )}
+      {view.unit === "usd" && view.hasConversion && view.lifetimeConversionTax > 0.5 && (
+        <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          {swatch({
+            background: CONVERSION_TAX_STRIPES,
+            border: "1px dotted color-mix(in srgb, var(--color-danger) 70%, transparent)",
+          })}
+          Tax on conversions
         </span>
       )}
     </div>

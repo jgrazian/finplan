@@ -8,11 +8,12 @@ use finplan_core::model::{
 };
 use finplan_core::simulation::simulate;
 
+use super::conversion::Conversions;
 use super::normalize::{fixed_sweeps, normalize};
 use super::retirement::resolve;
 use super::{
     DrawdownAccount, DrawdownBody, DrawdownChoice, DrawdownIncomeSource, DrawdownMarker,
-    DrawdownRequest, DrawdownSummary, DrawdownYear, MarkerKind, StrategyChoice,
+    DrawdownRequest, DrawdownSummary, DrawdownYear, MarkerKind,
 };
 use crate::compile::{self, CompiledScenario};
 use crate::error::{PlanError, PlanResult};
@@ -34,6 +35,11 @@ struct Sparse {
     /// Gross sale proceeds and cash withdrawn, and the credits they produced.
     gross: f64,
     credits: f64,
+    /// Roth conversions, gross, and their tax; `withheld` is the part kept
+    /// back to pay it, a distribution with no credit behind it.
+    conversion: f64,
+    conversion_tax: f64,
+    withheld: f64,
     shortfall: f64,
     total_tax: f64,
 }
@@ -149,6 +155,21 @@ fn fold(compiled: &CompiledScenario, result: &SimulationResult, from_year: i64) 
                     *row.withdrawals.entry(id).or_default() += amount;
                 }
             }
+            // Not a withdrawal: the moved part is a transfer and lot moves.
+            // Withheld, the tax is kept back from the conversion as a
+            // distribution, already in `gross` and `withdrawals`; with the
+            // penalty on it before 59½ it is `tax / (1 - rate)`, so the
+            // larger of the two is the tax and penalty together.
+            StateEvent::RothConversion {
+                amount,
+                tax,
+                withheld,
+                ..
+            } => {
+                row.conversion += amount;
+                row.conversion_tax += tax.max(*withheld);
+                row.withheld += withheld;
+            }
             StateEvent::RmdWithdrawal {
                 account_id,
                 actual_amount,
@@ -247,9 +268,11 @@ fn densify(
 
             // Withheld = gross sales less the credits they produced. A credit
             // with no sale behind it (a house sold) must not read as negative.
-            let withdrawal_taxes = (row.gross - row.credits).max(0.0);
+            // What a conversion withheld is its tax, counted there.
+            let withdrawal_taxes = (row.gross - row.credits - row.withheld).max(0.0);
             let tracked_in: f64 = income.iter().sum::<f64>() + withdrawals.iter().sum::<f64>();
-            let need = row.spending + withdrawal_taxes - row.shortfall - tracked_in;
+            let need =
+                row.spending + withdrawal_taxes + row.conversion_tax - row.shortfall - tracked_in;
             DrawdownYear {
                 year: row.year,
                 inflation: row.inflation,
@@ -258,6 +281,8 @@ fn densify(
                 withdrawals,
                 rmd,
                 withdrawal_taxes,
+                conversion: row.conversion,
+                conversion_tax: row.conversion_tax,
                 cash: need.max(0.0),
                 surplus: (-need).max(0.0),
                 shortfall: row.shortfall,
@@ -281,15 +306,15 @@ pub fn project(
 
     let mut base = None;
     let retirement = resolve(&compiled, request.retirement_year, seed, &mut base)?;
+    let conversions = Conversions::prepare(graph, &compiled, &retirement, &choices)?;
 
     let mut folded = Vec::with_capacity(choices.len());
     for choice in &choices {
-        let (config, overlay) = normalize(&compiled.config, choice, retirement.date)?;
+        let (from, conversion_overlay) = conversions.base(&compiled, choice);
+        let (config, overlay) = normalize(&from.config, choice, retirement.date)?;
         // The plan as it is may already have been simulated to find the
         // retirement date.
-        let reused = matches!(choice, StrategyChoice::AsPlanned)
-            .then(|| base.take())
-            .flatten();
+        let reused = choice.is_unchanged().then(|| base.take()).flatten();
         let result = match reused {
             Some(result) => result,
             None => {
@@ -301,14 +326,15 @@ pub fn project(
         folded.push((
             choice.clone(),
             overlay,
-            fold(&compiled, &result, retirement.year),
+            conversion_overlay,
+            fold(from, &result, retirement.year),
         ));
     }
 
     let accounts = labelled_accounts(graph, &compiled);
     let income_ids: BTreeSet<i64> = folded
         .iter()
-        .flat_map(|(_, _, f)| f.years.iter().flat_map(|y| y.income.keys().copied()))
+        .flat_map(|(.., f)| f.years.iter().flat_map(|y| y.income.keys().copied()))
         .collect();
     let mut events: Vec<_> = graph
         .events
@@ -326,7 +352,7 @@ pub fn project(
 
     let choices = folded
         .into_iter()
-        .map(|(choice, overlay, folded)| {
+        .map(|(choice, overlay, conversion_overlay, folded)| {
             let Folded {
                 ending_balance,
                 ending_balance_real,
@@ -338,6 +364,7 @@ pub fn project(
             DrawdownChoice {
                 choice,
                 overlay,
+                conversion_overlay,
                 summary: DrawdownSummary {
                     lifetime_spending: years.iter().map(|y| y.spending).sum(),
                     lifetime_tax: years.iter().map(|y| y.total_tax).sum::<f64>() + 0.0,
@@ -361,6 +388,7 @@ pub fn project(
         income_sources,
         fixed_sweeps: fixed_sweeps(&compiled),
         plan_funding: graph.funding(),
+        conversions: conversions.info(),
         choices,
     })
 }

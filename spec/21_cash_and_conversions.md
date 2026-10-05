@@ -238,9 +238,10 @@ Drawdown:
   to 12% / 22% / 24%*. `StrategyChoice` gains `conversion: Option<ConversionChoice>`.
   Normalizing for a rate sets every `RothConversion` effect's amount to
   `bracket_room(rate)`; when the plan has none, it adds an overlay event (from
-  the retirement date until the year before RMDs, Dec 31, from the largest
-  tax-deferred account into the largest tax-free one, tax paid from the largest
-  taxable account) and reports `conversion_overlay`. *None* disables the plan's
+  the retirement date until the year before RMDs, Dec 30 (the template's day,
+  see Timing), from the largest tax-deferred account into the largest tax-free
+  one, tax paid from the largest taxable account, else the largest bank) and
+  reports `conversion_overlay`. *None* disables the plan's
   conversions. The toggle is disabled, with the reason, when the plan has no
   tax-free account to convert into.
 - The comparison runs each strategy with the toggle's setting, so
@@ -250,7 +251,12 @@ Drawdown:
   converts gets a **hollow marker above the axis** at its amount, and its tax
   joins the year's tax below zero, marked apart from tax on withdrawals.
 - `DrawdownYear` gains `conversion` (gross) and `conversion_tax`; the side
-  panel shows both and the Roth's balance; the CSV gains the columns.
+  panel shows both and the Roth's balance; the CSV gains the columns. The
+  conversion tax is an outflow in spec 20's identity
+  (`… = spending + withdrawal_taxes + conversion_tax + surplus`). Withheld,
+  the part kept back is a real distribution from the pre-tax account (in
+  `withdrawals`), and its tax and penalty are `conversion_tax`, not
+  `withdrawal_taxes`.
 - Apply to plan writes the conversion choice: it retargets the plan's
   conversion events, or adds the template's event when there are none.
 

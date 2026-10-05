@@ -2,10 +2,20 @@
  * Roth conversions on the Plan tab: the accounts a conversion can name, the
  * defaults "Add Roth conversions" offers, the event it writes (the plan
  * crate's `RothConversions` template, built here against the plan the screen
- * already holds), and the hint for a `bracket_room` amount that fires before
- * December.
+ * already holds), the hint for a `bracket_room` amount that fires before
+ * December, and what Drawdown's Apply writes for its conversion toggle.
  */
-import type { Account, AmountSpec, EffectSpec, EventBody, NamedParameter, TriggerSpec } from "@/lib/api/types";
+import type {
+  Account,
+  AmountSpec,
+  ConversionChoice as DrawdownConversionChoice,
+  ConversionOverlay,
+  EffectSpec,
+  Event,
+  EventBody,
+  NamedParameter,
+  TriggerSpec,
+} from "@/lib/api/types";
 
 /**
  * Month and day the conversions fire. Not Dec 31: the engine captures
@@ -151,6 +161,74 @@ export function conversionEvent(choice: ConversionChoice): EventBody {
       },
     ],
   };
+}
+
+/** One write Drawdown's Apply makes to the plan's events. */
+export type ConversionWrite =
+  | { kind: "replace"; id: number; body: EventBody }
+  | { kind: "create"; body: EventBody };
+
+function converts(effect: EffectSpec): boolean {
+  if (effect.kind === "RothConversion") return true;
+  if (effect.kind === "Random") return converts(effect.on_true) || (effect.on_false ? converts(effect.on_false) : false);
+  return false;
+}
+
+function withAmount(effect: EffectSpec, amount: AmountSpec): EffectSpec {
+  if (effect.kind === "RothConversion") return { ...effect, amount };
+  if (effect.kind === "Random") {
+    return {
+      ...effect,
+      on_true: withAmount(effect.on_true, amount),
+      on_false: effect.on_false ? withAmount(effect.on_false, amount) : null,
+    };
+  }
+  return effect;
+}
+
+/**
+ * What Drawdown's Apply writes for the conversion toggle, against the plan's
+ * events as they are now. A rate retargets every enabled converting event to
+ * `bracket_room(rate)`, or, when there is none, adds the event Drawdown ran
+ * as its overlay. None switches the conversions off: an event that only
+ * converts is disabled; one that also does other things loses its
+ * conversions (nested ones convert nothing).
+ */
+export function conversionWrites(
+  events: Event[],
+  setting: DrawdownConversionChoice,
+  overlay: ConversionOverlay | null | undefined,
+): ConversionWrite[] {
+  const converting = events.filter((e) => e.enabled && e.effects.some(converts));
+  if (converting.length === 0) {
+    if (setting.kind === "Off" || !overlay) return [];
+    return [{
+      kind: "create",
+      body: conversionEvent({
+        name: "Roth conversions",
+        fromAccountId: overlay.from_account_id,
+        toAccountId: overlay.to_account_id,
+        ceilingRate: setting.ceiling_rate,
+        startYear: overlay.start_year,
+        untilAge: overlay.until_age,
+        payTaxFromAccountId: overlay.pay_tax_from_account_id ?? null,
+      }),
+    }];
+  }
+  return converting.map(({ id, ...event }): ConversionWrite => {
+    const body: EventBody = { ...event };
+    if (setting.kind === "UpTo") {
+      const amount: AmountSpec = { kind: "Expression", source: `bracket_room(${percentFigure(setting.ceiling_rate)}%)` };
+      body.effects = event.effects.map((e) => withAmount(e, amount));
+    } else {
+      const kept = event.effects
+        .filter((e) => e.kind !== "RothConversion")
+        .map((e) => withAmount(e, { kind: "Fixed", value: 0 }));
+      if (kept.length === 0) body.enabled = false;
+      else body.effects = kept;
+    }
+    return { kind: "replace", id, body };
+  });
 }
 
 const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August",

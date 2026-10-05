@@ -4,6 +4,7 @@ import type { StrategyChoice } from "./StrategyChoice";
 export type ComparisonRow = {
   choice: StrategyChoice;
   overlay: boolean;
+  conversion_overlay: boolean;
   success_rate: number;
   funding_success_rate?: number | null;
   /**

@@ -121,6 +121,18 @@ export function DrawdownSide({
               )}
             </tbody>
           </table>
+          {panel.conversion && (
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 8, fontSize: 13 }}>
+              <span style={{ color: MUTED }}>
+                Roth conversion
+                <span style={{ display: "block", fontSize: 12, color: FAINT }}>
+                  Tax {fmtCurrency(panel.conversion.tax)} · {panel.conversion.accounts.join(", ")}{" "}
+                  {fmtCompact(panel.conversion.roth)} at year end
+                </span>
+              </span>
+              <b style={{ fontVariantNumeric: "tabular-nums" }}>{fmtCurrency(panel.conversion.amount)}</b>
+            </div>
+          )}
           {panel.rmd && (
             <div style={{ display: "flex", justifyContent: "space-between", gap: 8, fontSize: 13 }}>
               <span style={{ color: MUTED }}>
@@ -134,7 +146,7 @@ export function DrawdownSide({
           )}
           <p style={{ margin: 0, fontSize: 11.5, color: FAINT }}>
             Account amounts are after the tax withheld on them. The tax is drawn below zero and is
-            not part of the funded total.
+            not part of the funded total{panel.conversion ? ", nor is a conversion, which moves money rather than spending it" : ""}.
           </p>
           {panel.note && (
             <p
@@ -189,6 +201,14 @@ export function DrawdownSide({
               Tax on withdrawals · {fmtPercent(view.lifetimeTaxShare, 0)} of spending
             </span>
             <b style={{ fontFamily: "var(--font-heading)" }}>{fmtCompact(view.lifetimeTax)}</b>
+          </div>
+        )}
+        {view.lifetimeConversion > 0.5 && (
+          <div style={{ display: "flex", justifyContent: "space-between", marginTop: 6, fontSize: 13 }}>
+            <span style={{ color: MUTED }}>
+              Converted to Roth · tax {fmtCompact(view.lifetimeConversionTax)}
+            </span>
+            <b style={{ fontFamily: "var(--font-heading)" }}>{fmtCompact(view.lifetimeConversion)}</b>
           </div>
         )}
         <div style={{ display: "flex", justifyContent: "space-between", marginTop: 6, fontSize: 13 }}>

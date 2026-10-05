@@ -6,8 +6,15 @@
  *
  * ```text
  * sum(income) + sum(withdrawals) + cash + shortfall
- *     = spending + withdrawal_taxes + surplus      (within $1)
+ *     = spending + withdrawal_taxes + conversion_tax + surplus   (within $1)
  * ```
+ *
+ * A conversion moves money between two of the plan's accounts, so it is on
+ * neither side. Its tax is an outflow, paid from the bank (in `cash`), by a
+ * taxable sale (in `withdrawals`), or withheld from the conversion: then the
+ * part kept back is a real distribution from the pre-tax account, in
+ * `withdrawals`, and its tax is counted here rather than in
+ * `withdrawal_taxes`.
  */
 export type DrawdownYear = {
   year: number;
@@ -32,9 +39,20 @@ export type DrawdownYear = {
    */
   rmd: Array<number>;
   /**
-   * Tax and penalties withheld from sale proceeds.
+   * Tax and penalties withheld from sale proceeds, except what a withheld
+   * conversion kept back (that is in `conversion_tax`).
    */
   withdrawal_taxes: number;
+  /**
+   * Roth conversions, gross: pre-tax money moved to a Roth. Not spending,
+   * and not a withdrawal.
+   */
+  conversion: number;
+  /**
+   * Income tax on the year's conversions, plus the early-withdrawal
+   * penalty on a part withheld before 59½.
+   */
+  conversion_tax: number;
   /**
    * Drawn from bank balances: whatever else covered spending.
    */

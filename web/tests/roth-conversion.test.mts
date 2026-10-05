@@ -6,8 +6,9 @@ import {
   conversionDefaults,
   conversionEvent,
   conversionUnavailable,
+  conversionWrites,
 } from "../lib/view/conversion.ts";
-import type { Account, EffectSpec, NamedParameter, TriggerSpec } from "../lib/api/types.ts";
+import type { Account, EffectSpec, Event, NamedParameter, TriggerSpec } from "../lib/api/types.ts";
 
 const investment = (id: number, tax_status: "Taxable" | "TaxDeferred" | "TaxFree", cash: number): Account => ({
   id,
@@ -170,4 +171,70 @@ test("a bracket_room amount that fires before December gets a hint", () => {
   );
   // Unknown month: no hint rather than a guess.
   assert.equal(bracketRoomTimingHint({ kind: "Manual" }, [conversion]), null);
+});
+
+test("Drawdown's Apply retargets the plan's conversions, adds the overlay's, or switches them off", () => {
+  const overlay = {
+    from_account_id: 3,
+    to_account_id: 4,
+    pay_tax_from_account_id: 1,
+    start_year: 2036,
+    until_age: 75,
+  };
+  const upTo22 = { kind: "UpTo", ceiling_rate: 0.22 } as const;
+  const expense: EffectSpec = { kind: "Expense", from_account_id: 6, amount: { kind: "Fixed", value: 10 } } as EffectSpec;
+  const conversion: EffectSpec = {
+    kind: "RothConversion",
+    from_account_id: 3,
+    to_account_id: 2,
+    amount: { kind: "Fixed", value: 20000 },
+    pay_tax_from_account_id: null,
+  };
+  const event = (id: number, effects: EffectSpec[], enabled = true): Event => ({
+    id,
+    name: `Event ${id}`,
+    description: null,
+    fires_once: false,
+    enabled,
+    sort_order: id,
+    trigger: { kind: "Repeating", interval: "Yearly", start_condition: null, end_condition: null, max_occurrences: null },
+    effects,
+  });
+
+  // None to retarget: the overlay's event, at the rate picked.
+  const [added] = conversionWrites([event(1, [expense])], upTo22, overlay);
+  assert.equal(added.kind, "create");
+  const created = added.body;
+  assert.deepEqual(created.trigger, {
+    kind: "Repeating",
+    interval: "Yearly",
+    start_condition: { kind: "Date", on_date: "2036-12-30" },
+    end_condition: { kind: "Age", years: 75, months: null },
+    max_occurrences: null,
+  });
+  assert.deepEqual(created.effects, [{
+    kind: "RothConversion",
+    from_account_id: 3,
+    to_account_id: 4,
+    amount: { kind: "Expression", source: "bracket_room(22%)" },
+    pay_tax_from_account_id: 1,
+  }]);
+  assert.deepEqual(conversionWrites([], { kind: "Off" }, overlay), []);
+  assert.deepEqual(conversionWrites([], upTo22, null), []);
+
+  // The plan's own (enabled) conversions are retargeted in place; a disabled
+  // one is left alone.
+  const plan = [event(1, [expense]), event(2, [conversion]), event(3, [conversion], false)];
+  const writes = conversionWrites(plan, upTo22, overlay);
+  assert.equal(writes.length, 1);
+  const [write] = writes;
+  assert.equal(write.kind, "replace");
+  assert.equal(write.kind === "replace" && write.id, 2);
+  assert.equal(write.body.sort_order, 2, "it keeps its place");
+  assert.deepEqual(write.body.effects, [{ ...conversion, amount: { kind: "Expression", source: "bracket_room(22%)" } }]);
+
+  // None: a conversion-only event is disabled; a mixed one loses its conversion.
+  const off = conversionWrites([event(2, [conversion]), event(4, [expense, conversion])], { kind: "Off" }, overlay);
+  assert.deepEqual(off.map((w) => [w.body.enabled, w.body.effects.length]), [[false, 1], [true, 1]]);
+  assert.equal(off[1].body.effects[0].kind, "Expense");
 });
