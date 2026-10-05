@@ -1,5 +1,5 @@
-//! The plan group: `preview_changes`, `preview_paths`, `validate_changes` and
-//! `preflight`.
+//! The plan group: `preview_changes`, `preview_paths`, `validate_changes`,
+//! `preflight` and `expand_template`.
 
 use serde_json::{Value, json};
 
@@ -8,6 +8,7 @@ use crate::api::suggestions::MAX_STEPS;
 use crate::observability::AiToolOutcome;
 use crate::suggest::ai::prompt::change_schema;
 use finplan_plan::suggest::Change;
+use finplan_plan::templates::{TemplateKind, TemplateRequest};
 
 /// Most changes in one step.
 pub const MAX_CHANGES: usize = 12;
@@ -328,6 +329,77 @@ pub(super) fn validate(input: &Value, env: &ToolEnv<'_>) -> ToolOutput {
             }
             out
         }
+    }
+}
+
+/// The templates a review may expand: those whose changes are the fix a
+/// review note offers. The drafting agent serves its own `expand_template`
+/// over every template.
+pub const REVIEW_TEMPLATES: &[TemplateKind] = &[TemplateKind::ReinvestCash];
+
+fn kind_name(kind: TemplateKind) -> String {
+    serde_json::to_value(kind)
+        .ok()
+        .and_then(|v| v.as_str().map(str::to_owned))
+        .unwrap_or_default()
+}
+
+pub(super) fn expand_template_schema() -> Value {
+    let kinds: Vec<String> = REVIEW_TEMPLATES.iter().map(|k| kind_name(*k)).collect();
+    json!({
+        "type": "object",
+        "properties": {
+            "kind": {"type": "string", "enum": kinds},
+            "key_prefix": {"type": "string", "description": "Prepended to every key the template creates; use a different one per expansion in a path."},
+            "params": {"type": "object", "description": "The template's parameters: the type named for the kind in the reference."}
+        },
+        "required": ["kind", "params"]
+    })
+}
+
+/// A `{kind, key_prefix, params}` call read as a [`TemplateRequest`], as both
+/// the review's and the drafting agent's `expand_template` take it.
+pub fn template_request(input: &Value) -> Result<TemplateRequest, String> {
+    let Some(kind) = input.get("kind").and_then(Value::as_str) else {
+        return Err("kind is required".into());
+    };
+    let mut request = match input.get("params") {
+        Some(Value::Object(map)) => map.clone(),
+        Some(Value::Null) | None => serde_json::Map::new(),
+        Some(_) => return Err("params is an object".into()),
+    };
+    request.insert("kind".into(), json!(kind));
+    request.insert(
+        "key_prefix".into(),
+        input.get("key_prefix").cloned().unwrap_or(json!("")),
+    );
+    serde_json::from_value(Value::Object(request))
+        .map_err(|e| format!("the {kind} parameters do not read: {e}"))
+}
+
+pub(super) fn expand_template(input: &Value, env: &ToolEnv<'_>) -> ToolOutput {
+    let invalid = |message: String| ToolOutput::error(AiToolOutcome::Invalid, message);
+    let request = match template_request(input) {
+        Ok(request) => request,
+        Err(message) => return invalid(message),
+    };
+    if !REVIEW_TEMPLATES.contains(&request.template.kind()) {
+        return invalid(format!(
+            "a review expands only {}",
+            REVIEW_TEMPLATES
+                .iter()
+                .map(|k| kind_name(*k))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+    match env
+        .host
+        .expand_template(&request)
+        .and_then(|e| serde_json::to_string(&e).map_err(|e| e.to_string()))
+    {
+        Ok(text) => ToolOutput::ok(text),
+        Err(message) => invalid(message),
     }
 }
 

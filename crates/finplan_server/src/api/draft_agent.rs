@@ -1063,6 +1063,13 @@ impl ToolHost for DraftTools {
             .map_err(|e| e.to_string())
     }
 
+    fn expand_template(
+        &self,
+        request: &finplan_plan::templates::TemplateRequest,
+    ) -> Result<finplan_plan::templates::Expansion, String> {
+        request.expand_in(&self.graph()).map_err(|e| e.to_string())
+    }
+
     fn inspect_path<'a>(
         &'a self,
         _rank: PathRank,

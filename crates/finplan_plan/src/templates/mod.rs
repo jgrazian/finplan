@@ -1,9 +1,10 @@
 //! Templates: plain facts about a household ("a $142k salary until 65", "a
 //! 30-year mortgage at 6.5%") lowered to the [`Change`]s that write them.
 //!
-//! Guided setup and the drafting agent's `expand_template` tool share these
-//! builders, so the trigger and effect trees for a salary, an employer match,
-//! spending, retirement, a home purchase and Social Security are written once.
+//! Guided setup, the review's rules and the `expand_template` tool (the
+//! drafting agent's and the reviewer's) share these builders, so the trigger
+//! and effect trees for a salary, an employer match, spending, retirement, a
+//! home purchase, Social Security and reinvesting cash are written once.
 //! Every expansion is a list of `add` changes at `""` on `new_*` targets; what
 //! one creates is named by `{key_prefix}{local key}`, and any id field of the
 //! request may point at something else in the same batch with `{"$new": key}`
@@ -20,8 +21,9 @@ use serde_json::{Map, Value, json};
 use ts_rs::TS;
 
 use crate::error::PlanError;
-use crate::specs::Interval;
+use crate::graph::ScenarioGraph;
 use crate::specs::parameters::ParameterValueSpec;
+use crate::specs::{AmountSpec, EffectSpec, Interval, TriggerSpec};
 use crate::suggest::{Change, ChangeOp, ChangeTarget, RefKind};
 
 // ── request types ───────────────────────────────────────────────────────────
@@ -379,6 +381,40 @@ pub struct JobLossParams {
     pub enabled: Option<bool>,
 }
 
+/// Cash above a buffer, reinvested once a year: a yearly event on December 30
+/// that moves the cash in `from_account_id` above `buffer_years` of spending
+/// into `to_account_id` and buys that account's holdings, one purchase per
+/// holding at its weight when the template runs. When both name the same
+/// investment account, its uninvested cash is invested in place, with no
+/// transfer. Reads the plan: expanded with [`expand_template_in`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct ReinvestCashParams {
+    /// Defaults to "Reinvest cash".
+    #[serde(default)]
+    #[ts(optional)]
+    pub name: Option<String>,
+    /// The bank, or the investment account holding uninvested cash; an
+    /// account the plan already has.
+    pub from_account_id: RowRef,
+    /// The investment account that buys. Defaults to `from_account_id` when
+    /// that is an investment account (in place), else the plan's largest
+    /// taxable account. Cash moves between accounts only from a bank or a
+    /// taxable account, and only into a taxable one.
+    #[serde(default)]
+    #[ts(optional)]
+    pub to_account_id: Option<RowRef>,
+    /// Years of spending kept as cash in `from_account_id`; defaults to 2.
+    #[serde(default)]
+    #[ts(optional)]
+    pub buffer_years: Option<f64>,
+    /// A year's spending, in plan-start dollars, that the buffer counts in.
+    /// Defaults to the plan's recurring expenses at their starting amounts.
+    #[serde(default)]
+    #[ts(optional)]
+    pub annual_spending: Option<f64>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export)]
@@ -392,6 +428,7 @@ pub enum TemplateKind {
     MarketCrash,
     LargeExpense,
     JobLoss,
+    ReinvestCash,
 }
 
 /// One template and its parameters, tagged by `kind`.
@@ -408,6 +445,7 @@ pub enum Template {
     MarketCrash(MarketCrashParams),
     LargeExpense(LargeExpenseParams),
     JobLoss(JobLossParams),
+    ReinvestCash(ReinvestCashParams),
 }
 
 impl Template {
@@ -422,6 +460,7 @@ impl Template {
             Template::MarketCrash(_) => TemplateKind::MarketCrash,
             Template::LargeExpense(_) => TemplateKind::LargeExpense,
             Template::JobLoss(_) => TemplateKind::JobLoss,
+            Template::ReinvestCash(_) => TemplateKind::ReinvestCash,
         }
     }
 }
@@ -440,6 +479,11 @@ pub struct TemplateRequest {
 impl TemplateRequest {
     pub fn expand(&self) -> Result<Expansion, TemplateError> {
         expand_template(&self.key_prefix, &self.template)
+    }
+
+    /// [`Self::expand`] against the plan the changes are for.
+    pub fn expand_in(&self, plan: &ScenarioGraph) -> Result<Expansion, TemplateError> {
+        expand_template_in(plan, &self.key_prefix, &self.template)
     }
 }
 
@@ -487,8 +531,30 @@ impl From<TemplateError> for PlanError {
 /// Lower `template` to changes, creating its resources under
 /// `{key_prefix}{local key}`. Parameters are checked here (amounts finite and
 /// positive, ages and dates well-formed); references are checked when the
-/// changes are resolved against a plan.
+/// changes are resolved against a plan. A template that reads the plan
+/// ([`Template::ReinvestCash`]) is refused here: expand it with
+/// [`expand_template_in`].
 pub fn expand_template(key_prefix: &str, template: &Template) -> Result<Expansion, TemplateError> {
+    expand(None, key_prefix, template)
+}
+
+/// [`expand_template`] against the plan the changes will apply to, which the
+/// templates that read the plan need: [`Template::ReinvestCash`] sizes its
+/// buffer by the plan's spending and splits its purchases by the receiving
+/// account's holdings.
+pub fn expand_template_in(
+    plan: &ScenarioGraph,
+    key_prefix: &str,
+    template: &Template,
+) -> Result<Expansion, TemplateError> {
+    expand(Some(plan), key_prefix, template)
+}
+
+fn expand(
+    plan: Option<&ScenarioGraph>,
+    key_prefix: &str,
+    template: &Template,
+) -> Result<Expansion, TemplateError> {
     if key_prefix.len() > 64 || key_prefix.chars().any(char::is_control) {
         return Err(TemplateError::new("key_prefix is too long or not text"));
     }
@@ -509,6 +575,12 @@ pub fn expand_template(key_prefix: &str, template: &Template) -> Result<Expansio
         Template::MarketCrash(p) => market_crash(&mut out, p)?,
         Template::LargeExpense(p) => large_expense(&mut out, p)?,
         Template::JobLoss(p) => job_loss(&mut out, p)?,
+        Template::ReinvestCash(p) => {
+            let plan = plan.ok_or_else(|| {
+                TemplateError::new("reinvest_cash reads the plan; expand it against one")
+            })?;
+            reinvest_cash(&mut out, plan, p)?;
+        }
     }
     Ok(Expansion {
         changes: out.changes,
@@ -1105,6 +1177,283 @@ fn job_loss(out: &mut Builder, p: &JobLossParams) -> Result<(), TemplateError> {
     Ok(())
 }
 
+/// Years of spending [`Template::ReinvestCash`] keeps as cash unless told.
+pub const REINVEST_BUFFER_YEARS: f64 = 2.0;
+
+/// What an account holds at the plan's start, by asset: each asset's id and
+/// its lots' value at the asset's starting price, in the plan's asset order.
+/// Assets worth nothing are left out.
+pub fn holdings(plan: &ScenarioGraph, account_id: i64) -> Vec<(i64, f64)> {
+    let mut assets: Vec<_> = plan.assets.iter().collect();
+    assets.sort_by_key(|a| (a.sort_order, a.id));
+    let lots = plan
+        .positions
+        .get(&account_id)
+        .map_or(&[][..], Vec::as_slice);
+    assets
+        .into_iter()
+        .filter_map(|asset| {
+            let value: f64 = lots
+                .iter()
+                .filter(|lot| lot.asset_id == asset.id)
+                .map(|lot| lot.units * asset.initial_price)
+                .sum();
+            (value > 0.).then_some((asset.id, value))
+        })
+        .collect()
+}
+
+/// The taxable investment account whose holdings are worth the most at the
+/// plan's start (the first listed on a tie); None when no taxable account
+/// holds anything.
+pub fn largest_taxable(plan: &ScenarioGraph) -> Option<i64> {
+    let mut accounts: Vec<_> = plan
+        .accounts
+        .iter()
+        .filter(|a| {
+            plan.investment
+                .get(&a.id)
+                .is_some_and(|i| i.tax_status == "Taxable")
+        })
+        .map(|a| {
+            let value: f64 = holdings(plan, a.id).iter().map(|(_, v)| v).sum();
+            (a.sort_order, a.id, value)
+        })
+        .filter(|(.., value)| *value > 0.)
+        .collect();
+    accounts.sort_by_key(|(order, id, _)| (*order, *id));
+    // `max_by` keeps the last of equals, so walk backwards for the first.
+    accounts
+        .into_iter()
+        .rev()
+        .max_by(|a, b| a.2.total_cmp(&b.2))
+        .map(|(_, id, _)| id)
+}
+
+/// A year of the plan's recurring spending at its starting amounts: every
+/// enabled repeating expense with a fixed amount (inflation-adjusted or not),
+/// times how often a year it is paid. Expenses that run in different years
+/// are added together, so a plan whose spending changes over time is better
+/// served by an explicit figure.
+fn recurring_spending(plan: &ScenarioGraph) -> f64 {
+    fn starting(amount: &AmountSpec) -> Option<f64> {
+        match amount {
+            AmountSpec::Fixed { value } => Some(*value),
+            AmountSpec::InflationAdjusted { inner } => starting(inner),
+            _ => None,
+        }
+    }
+    plan.events
+        .iter()
+        .filter(|e| e.enabled != 0)
+        .filter_map(|e| crate::specs::events::read_event(plan, e.id).ok())
+        .map(|event| {
+            let TriggerSpec::Repeating { interval, .. } = event.trigger else {
+                return 0.;
+            };
+            let times = per_year(interval).unwrap_or(0.);
+            event
+                .effects
+                .iter()
+                .filter_map(|effect| match effect {
+                    EffectSpec::Expense { amount, .. } => starting(amount),
+                    _ => None,
+                })
+                .sum::<f64>()
+                * times
+        })
+        .sum()
+}
+
+/// A share written into an expression: four decimals, trailing zeros cut.
+fn share_text(share: f64) -> String {
+    let text = format!("{share:.4}");
+    text.trim_end_matches('0').trim_end_matches('.').to_string()
+}
+
+fn reinvest_cash(
+    out: &mut Builder,
+    plan: &ScenarioGraph,
+    p: &ReinvestCashParams,
+) -> Result<(), TemplateError> {
+    let existing = |r: &RowRef, field: &str| match r {
+        RowRef::Id(id) if plan.accounts.iter().any(|a| a.id == *id) => Ok(*id),
+        RowRef::Id(id) => Err(TemplateError::new(format!(
+            "{field} {id} is not an account of the plan"
+        ))),
+        RowRef::New(_) => Err(TemplateError::new(format!(
+            "{field} must be an account the plan already has"
+        ))),
+    };
+    let name_of = |id: i64| {
+        plan.accounts
+            .iter()
+            .find(|a| a.id == id)
+            .map_or_else(String::new, |a| a.name.clone())
+    };
+    let status = |id: i64| plan.investment.get(&id).map(|i| i.tax_status.as_str());
+
+    let from = existing(&p.from_account_id, "from_account_id")?;
+    let from_bank = plan.bank.contains_key(&from);
+    if !from_bank && status(from).is_none() {
+        return Err(TemplateError::new(
+            "from_account_id is a bank or an investment account",
+        ));
+    }
+    let to = match &p.to_account_id {
+        Some(r) => existing(r, "to_account_id")?,
+        None if !from_bank => from,
+        None => largest_taxable(plan).ok_or_else(|| {
+            TemplateError::new("the plan has no taxable account with holdings to reinvest in")
+        })?,
+    };
+    let in_place = to == from;
+    let Some(to_status) = status(to) else {
+        return Err(TemplateError::new("to_account_id is an investment account"));
+    };
+    // Cash leaving a tax-advantaged account is a distribution, and cash
+    // arriving in one a contribution: neither is a plain transfer.
+    if !in_place && (to_status != "Taxable" || status(from).is_some_and(|s| s != "Taxable")) {
+        return Err(TemplateError::new(
+            "cash moves between accounts only from a bank or a taxable account into a taxable \
+             one; reinvest a tax-advantaged account's cash in place",
+        ));
+    }
+
+    let years = p.buffer_years.unwrap_or(REINVEST_BUFFER_YEARS);
+    if !years.is_finite() || !(0. ..=50.).contains(&years) {
+        return Err(TemplateError::new("buffer_years is between 0 and 50"));
+    }
+    let buffer = if years > 0. {
+        let spending = match p.annual_spending {
+            Some(spending) => {
+                positive("annual_spending", spending)?;
+                spending
+            }
+            None => recurring_spending(plan),
+        };
+        if spending <= 0. {
+            return Err(TemplateError::new(
+                "the plan has no recurring spending to size the buffer by; pass annual_spending",
+            ));
+        }
+        (years * spending).round()
+    } else {
+        0.
+    };
+
+    let held = holdings(plan, to);
+    let total: f64 = held.iter().map(|(_, v)| v).sum();
+    if held.is_empty() {
+        return Err(TemplateError::new(format!(
+            "{} holds nothing to buy",
+            name_of(to)
+        )));
+    }
+
+    // The cash above the buffer, in plan-start dollars grown with inflation.
+    let excess = if buffer > 0. {
+        format!("max(0, cash(source) - inflation({buffer}))")
+    } else {
+        "max(0, cash(source))".to_string()
+    };
+    let mut effects = Vec::new();
+    // What the purchases spend: the excess itself in place; else whatever
+    // cash the receiving account holds once the excess has arrived.
+    let pool = if in_place {
+        excess
+    } else {
+        effects.push(json!({
+            "kind": "CashTransfer",
+            "from_account_id": from,
+            "to_account_id": to,
+            "amount": expression(excess),
+        }));
+        "max(0, cash(source))".to_string()
+    };
+    // Each purchase sees the cash the ones before it left, so it takes its
+    // weight's share of what remains, and the last takes the rest.
+    let mut left = 1.;
+    let mut split = Vec::new();
+    for (i, (asset_id, value)) in held.iter().enumerate() {
+        let weight = value / total;
+        let source = if i + 1 == held.len() {
+            pool.clone()
+        } else {
+            format!("{} * {pool}", share_text(weight / left))
+        };
+        left -= weight;
+        effects.push(json!({
+            "kind": "AssetPurchase",
+            "from_account_id": to,
+            "to_account_id": to,
+            "asset_id": asset_id,
+            "amount": expression(source),
+        }));
+        let asset = plan
+            .assets
+            .iter()
+            .find(|a| a.id == *asset_id)
+            .map_or("", |a| a.name.as_str());
+        let percent = weight * 100.;
+        split.push(if percent < 1. {
+            format!("{percent:.1}% {asset}")
+        } else {
+            format!("{percent:.0}% {asset}")
+        });
+    }
+
+    // December 30, so the year-end balances (taken as December 31 opens,
+    // before its events) already show the cash reinvested.
+    let start = &plan.scenario.start_date;
+    let mut year: i64 = start
+        .get(0..4)
+        .and_then(|y| y.parse().ok())
+        .ok_or_else(|| TemplateError::new("the plan has no start date"))?;
+    if start.as_str() > format!("{year:04}-12-30").as_str() {
+        year += 1;
+    }
+    let first = json!({"kind": "Date", "on_date": format!("{year:04}-12-30")});
+
+    let from_name = name_of(from);
+    let to_name = name_of(to);
+    let cash = if buffer > 0. {
+        let span = if years == 1. {
+            "a year".to_string()
+        } else {
+            format!("{} years", share_text(years))
+        };
+        format!(
+            "{from_name}'s cash above {span} of spending ({} in {} dollars, grown with inflation)",
+            crate::rules::money(buffer),
+            start.get(0..4).unwrap_or_default(),
+        )
+    } else {
+        format!("all of {from_name}'s cash")
+    };
+    let weights = format!(
+        "split by their weights at the plan's start ({start}): {}",
+        split.join(", ")
+    );
+    let description = if in_place {
+        format!("Each December 30, invests {cash} in its holdings, {weights}.")
+    } else {
+        format!(
+            "Each December 30, moves {cash} into {to_name}, then invests {to_name}'s cash in its \
+             holdings, {weights}."
+        )
+    };
+    let mut body = event_body(
+        named(&p.name, "Reinvest cash")?,
+        false,
+        repeating(Interval::Yearly, Some(first), None),
+        effects,
+    );
+    body.insert("description".into(), json!(description));
+    out.create("reinvest_cash", RefKind::Event, Value::Object(body));
+    Ok(())
+}
+
 // ── building blocks ─────────────────────────────────────────────────────────
 
 /// A bank account holding `cash`.
@@ -1185,4 +1534,4 @@ pub fn position(asset_id: &RowRef, units: f64, cost_basis: f64) -> Value {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

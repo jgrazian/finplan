@@ -25,8 +25,8 @@ use finplan_plan::specs::scenarios::UpdateScenario;
 use finplan_plan::specs::taxes::{Bracket, CreateTaxConfig};
 use finplan_plan::templates::{
     EmployerMatchParams, HomePurchaseParams, JobLossParams, LargeExpenseParams, MarketCrashParams,
-    NewRef, RecurringExpenseParams, RetirementParams, RetirementSpending, RowRef, SalaryParams,
-    SocialSecurityParams, Template, TemplateKind, TemplateRequest, When,
+    NewRef, RecurringExpenseParams, ReinvestCashParams, RetirementParams, RetirementSpending,
+    RowRef, SalaryParams, SocialSecurityParams, Template, TemplateKind, TemplateRequest, When,
 };
 
 pub const ASK_USER: &str = "ask_user";
@@ -62,7 +62,7 @@ Settings every draft needs. The start date is today and is already set; never ch
 
 Holdings and returns. A new asset's name is its ticker symbol alone (VBTLX), and its description is the fund's full name as the statement prints it (Vanguard Total Bond Market Index Fund Admiral Shares); a holding with no ticker gets a short name. Give every holding a return profile by asset class, never one per fund: call find_return_profile for a ticker (or a name, or a class). It returns the user's own profile for the class, else a new_return_profile change to place once for the class. Cash held in a bank or brokerage account uses the cash class. Amounts in accounts come from the statement's balance and positions; a position needs units, cost_basis and purchase_date, and where the statement has no cost basis say so in a check note rather than setting basis equal to value silently.
 
-Facts that are templates. For a salary, an employer match, recurring spending, retirement, a home purchase, Social Security or a stress event, call expand_template: it lowers the fact to the changes that write it, with `$new` references you keep. Place the changes in a step of a note (or adjust them); use a different key_prefix for each expansion in one path so keys never collide.
+Facts that are templates. For a salary, an employer match, recurring spending, retirement, a home purchase, Social Security, a stress event or reinvesting cash above a buffer each year, call expand_template: it lowers the fact to the changes that write it, with `$new` references you keep. Place the changes in a step of a note (or adjust them); use a different key_prefix for each expansion in one path so keys never collide.
 
 Numbers and evidence. Every figure comes from a document, the description, an answer, or a tool's result; cite where in `evidence`: document (document_id, page, and the exact text quoted, checked against the document), description (an exact quote), answer (the question key), computed (a tool's name and the tool_use id of the call). An add note needs at least one. Never quote a statutory limit or do payment or growth arithmetic from memory: reference_facts, finance_calc, estimate_social_security and estimate_taxes are exact. Use summarize_transactions to find monthly spending from a transaction export rather than reading it line by line, match_account and reconcile to tie a statement to an account already in the draft.
 
@@ -96,6 +96,7 @@ pub fn extra_reference() -> &'static str {
             MarketCrashParams::decl(&cfg),
             LargeExpenseParams::decl(&cfg),
             JobLossParams::decl(&cfg),
+            ReinvestCashParams::decl(&cfg),
             When::decl(&cfg),
             RowRef::decl(&cfg),
             NewRef::decl(&cfg),
@@ -190,11 +191,11 @@ fn draft_tool_definitions() -> Vec<Value> {
         }),
         json!({
             "name": EXPAND_TEMPLATE,
-            "description": "Lower a plain fact (a salary, an employer match, recurring spending, retirement, a home purchase, Social Security, a stress event) to the changes that write it in the plan, with the `$new` keys they create. Place the changes in a step of a note, adjusting if needed. See TemplateRequest and the params types in the reference.",
+            "description": "Lower a plain fact (a salary, an employer match, recurring spending, retirement, a home purchase, Social Security, a stress event, reinvesting cash above a buffer) to the changes that write it in the plan, with the `$new` keys they create. Place the changes in a step of a note, adjusting if needed. See TemplateRequest and the params types in the reference.",
             "input_schema": {
                 "type": "object",
                 "properties": {
-                    "kind": {"type": "string", "enum": ["salary", "employer_match", "recurring_expense", "retirement", "home_purchase", "social_security", "market_crash", "large_expense", "job_loss"]},
+                    "kind": {"type": "string", "enum": ["salary", "employer_match", "recurring_expense", "retirement", "home_purchase", "social_security", "market_crash", "large_expense", "job_loss", "reinvest_cash"]},
                     "key_prefix": {"type": "string", "description": "Prepended to every key the template creates; use a different one per expansion in a path."},
                     "params": {"type": "object", "description": "The template's parameters (the type named for the kind in the reference)."}
                 },

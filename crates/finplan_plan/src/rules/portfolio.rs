@@ -2,8 +2,12 @@
 
 use std::collections::{BTreeSet, HashMap};
 
-use super::{Ctx, Draft, Evidence, Kind, Section, list, money};
+use super::{Ctx, Draft, DraftPath, Evidence, Kind, Section, clip, list, money, rmd_age};
 use crate::specs::EffectSpec;
+use crate::suggest::Change;
+use crate::templates::{
+    ReinvestCashParams, RowRef, Template, expand_template_in, holdings, largest_taxable,
+};
 
 /// A lot counts as bought at today's price when its basis is within this
 /// fraction of units × initial price.
@@ -113,42 +117,90 @@ const IDLE_YEARS_OF_SPENDING: f64 = 2.0;
 /// Consecutive year-ends above that line before the note fires.
 const IDLE_MIN_RUN: usize = 5;
 
-/// A bank account holding more than two years of spending, year after year,
-/// on the shown path.
+/// A stretch of consecutive year-ends at which an account's cash sat above a
+/// multiple of that year's spending, and its highest point.
+#[derive(Debug, Clone, Copy)]
+struct CashRun {
+    first: i64,
+    last: i64,
+    peak_year: i64,
+    peak: f64,
+}
+
+impl CashRun {
+    fn years(&self) -> usize {
+        (self.last - self.first + 1) as usize
+    }
+}
+
+/// The plan's first year-end that closes a whole calendar year.
+fn opening_year(ctx: &Ctx) -> Option<i64> {
+    ctx.results
+        .cash_flows
+        .iter()
+        .map(|c| c.year)
+        .find(|year| !ctx.is_partial_first_year(*year))
+}
+
+/// Every run of year-ends, in order, at which `account_id` held more cash
+/// than `line` years of that year's spending on the shown path. The plan's
+/// partial first year, and a year with no spending, break a run.
+fn cash_runs(ctx: &Ctx, account_id: i64, line: f64) -> Vec<CashRun> {
+    let mut runs: Vec<CashRun> = Vec::new();
+    let mut open = false;
+    for flow in &ctx.results.cash_flows {
+        let year = flow.year;
+        let cash = (!ctx.is_partial_first_year(year) && flow.expenses > 0.0)
+            .then(|| ctx.year_end_cash(account_id, year))
+            .flatten()
+            .filter(|cash| *cash > line * flow.expenses);
+        let Some(cash) = cash else {
+            open = false;
+            continue;
+        };
+        match runs.last_mut() {
+            Some(run) if open => {
+                run.last = year;
+                if cash > run.peak {
+                    (run.peak_year, run.peak) = (year, cash);
+                }
+            }
+            _ => runs.push(CashRun {
+                first: year,
+                last: year,
+                peak_year: year,
+                peak: cash,
+            }),
+        }
+        open = true;
+    }
+    runs
+}
+
+/// The run of idle year-ends that starts with the plan's first whole year:
+/// cash held from the start, which is `idle_bank_cash`'s case.
+fn idle_from_start(ctx: &Ctx, account_id: i64) -> Option<CashRun> {
+    let opening = opening_year(ctx)?;
+    cash_runs(ctx, account_id, IDLE_YEARS_OF_SPENDING)
+        .into_iter()
+        .find(|run| run.first == opening)
+}
+
+/// A bank account holding more than two years of spending from the plan's
+/// start, year after year, on the shown path. Cash that builds up only later
+/// is `cash_accumulates`'s.
 pub(super) fn idle_bank_cash(ctx: &Ctx) -> Vec<Draft> {
     let mut drafts = Vec::new();
     let mut bank_ids: Vec<i64> = ctx.graph.bank.keys().copied().collect();
     bank_ids.sort_unstable();
     for account_id in bank_ids {
-        // The longest run of years above the line: (first, last, peak year, peak).
-        let mut best: Option<(i64, i64, i64, f64)> = None;
-        let mut current: Option<(i64, i64, i64, f64)> = None;
-        for flow in &ctx.results.cash_flows {
-            let year = flow.year;
-            let idle = !ctx.is_partial_first_year(year)
-                && flow.expenses > 0.0
-                && ctx
-                    .year_end(account_id, year)
-                    .is_some_and(|b| b > IDLE_YEARS_OF_SPENDING * flow.expenses);
-            if !idle {
-                current = None;
-                continue;
-            }
-            let balance = ctx.year_end(account_id, year).unwrap_or(0.0);
-            current = Some(match current {
-                Some((first, _, peak_year, peak)) if balance <= peak => {
-                    (first, year, peak_year, peak)
-                }
-                Some((first, ..)) => (first, year, year, balance),
-                None => (year, year, year, balance),
-            });
-            if let Some(run) = current
-                && best.is_none_or(|b| run.1 - run.0 > b.1 - b.0)
-            {
-                best = Some(run);
-            }
-        }
-        let Some((first, last, peak_year, peak)) = best else {
+        let Some(CashRun {
+            first,
+            last,
+            peak_year,
+            peak,
+        }) = idle_from_start(ctx, account_id)
+        else {
             continue;
         };
         let years = (last - first + 1) as usize;
@@ -216,6 +268,230 @@ pub(super) fn idle_bank_cash(ctx: &Ctx) -> Vec<Draft> {
         });
     }
     drafts
+}
+
+/// How far above two years of spending cash must sit to count as building up.
+/// The buffer `ReinvestCash` keeps is two years of spending in plan-start
+/// dollars, grown with inflation to the day it runs, so a balance held at the
+/// buffer sits a little above two years of the spending paid earlier in the
+/// year: that is the buffer, not a build-up.
+const ACCUMULATE_MARGIN: f64 = 1.1;
+/// Consecutive year-ends above that line before `cash_accumulates` fires.
+const ACCUMULATE_MIN_RUN: usize = 3;
+
+/// Cash, in a bank or uninvested in an investment account, that rises above
+/// two years of spending after the plan begins and stays there for three or
+/// more year-ends on the shown path: typically from the first RMD year, when
+/// distributions exceed spending. Cash idle from the plan's first year-end is
+/// `idle_bank_cash`'s; a build-up counts only once that stretch has ended, so
+/// the two never describe the same years.
+pub(super) fn cash_accumulates(ctx: &Ctx) -> Vec<Draft> {
+    let Some(opening) = opening_year(ctx) else {
+        return Vec::new();
+    };
+    let mut accounts: Vec<_> = ctx
+        .graph
+        .accounts
+        .iter()
+        .filter(|a| ctx.graph.bank.contains_key(&a.id) || ctx.graph.investment.contains_key(&a.id))
+        .collect();
+    accounts.sort_by_key(|a| (a.sort_order, a.id));
+    let mut drafts = Vec::new();
+    for account in accounts {
+        let account_id = account.id;
+        let after = idle_from_start(ctx, account_id).map_or(opening, |run| run.last);
+        let Some(run) = cash_runs(ctx, account_id, IDLE_YEARS_OF_SPENDING * ACCUMULATE_MARGIN)
+            .into_iter()
+            .find(|run| run.first > after && run.years() >= ACCUMULATE_MIN_RUN)
+        else {
+            continue;
+        };
+        drafts.push(accumulation_note(ctx, account_id, run));
+    }
+    drafts
+}
+
+fn accumulation_note(ctx: &Ctx, account_id: i64, run: CashRun) -> Draft {
+    let CashRun {
+        first,
+        last,
+        peak_year,
+        peak,
+    } = run;
+    let name = ctx.account_name(account_id);
+    let bank = ctx.graph.bank.contains_key(&account_id);
+    let cash_first = ctx.year_end_cash(account_id, first).unwrap_or(0.0);
+    let spent_first = ctx.expenses(first).unwrap_or(0.0);
+    let spent_peak = ctx.expenses(peak_year).unwrap_or(0.0);
+
+    // RMDs paid into the account, when they start by the build-up's first year.
+    let rmd_year = ctx.birth_year().map(|b| b + i64::from(rmd_age(b)));
+    let rmds_in = ctx.events.iter().flat_map(|e| &e.effects).any(|effect| {
+        let mut found = false;
+        visit(effect, &mut |e| {
+            found |= matches!(e, EffectSpec::ApplyRmd { to_account_id, .. } if *to_account_id == account_id)
+        });
+        found
+    });
+    let cause = match rmd_year {
+        Some(year) if rmds_in && year <= first => {
+            format!(" From {year}, the RMDs paid into {name} exceed what the plan spends.")
+        }
+        _ => String::new(),
+    };
+
+    // The buffer: two years of the lowest spending from the build-up on, in
+    // plan-start dollars, so the cash kept stays under the line every year.
+    let spending = ctx
+        .results
+        .cash_flows
+        .iter()
+        .filter(|c| c.year >= first && c.expenses > 0.0)
+        .map(|c| c.expenses / ctx.inflation(c.year))
+        .fold(f64::INFINITY, f64::min);
+    let path = reinvest_path(ctx, account_id, spending.is_finite().then_some(spending));
+    let fix = match &path {
+        Ok((to, _)) => {
+            let into = if *to == account_id {
+                format!("{name}'s own holdings")
+            } else {
+                format!("{}'s holdings", ctx.account_name(*to))
+            };
+            format!(
+                " A yearly December 30 event keeps two years of spending as cash, {} in {} \
+                 dollars grown with inflation, and invests the rest in {into}.",
+                money((2.0 * spending).round()),
+                ctx.start().map_or(first, |s| s.year),
+            )
+        }
+        Err(why) => format!(" {why}"),
+    };
+    let paths = match path {
+        Ok((to, changes)) => {
+            let label = if to == account_id {
+                format!("Invest {name}'s cash above two years of spending")
+            } else {
+                format!(
+                    "Reinvest cash above two years of spending in {}",
+                    ctx.account_name(to)
+                )
+            };
+            vec![DraftPath::only(clip(&label), changes)]
+        }
+        Err(_) => Vec::new(),
+    };
+
+    let mut evidence = vec![
+        Evidence::Ledger {
+            year: first,
+            event_id: None,
+            account_id: Some(account_id),
+        },
+        Evidence::Stat {
+            name: "first year of the build-up".into(),
+            value: first as f64,
+        },
+        Evidence::Stat {
+            name: format!("peak cash {peak_year}"),
+            value: peak,
+        },
+        Evidence::Stat {
+            name: format!("expenses {peak_year}"),
+            value: spent_peak,
+        },
+    ];
+    if bank {
+        evidence.push(Evidence::AccountSeries {
+            account_id,
+            date: format!("{peak_year:04}-12-31"),
+            value: peak,
+        });
+    }
+    let (title, summary, held) = if bank {
+        (
+            format!(
+                "{name} builds up cash from {first}, peaking at {} in {peak_year}",
+                money(peak)
+            ),
+            format!(
+                "From {first} more money reaches {name} than the plan spends, and the surplus \
+                 sits as cash instead of being invested."
+            ),
+            "in cash",
+        )
+    } else {
+        (
+            format!(
+                "Cash builds up uninvested in {name} from {first}, peaking at {} in {peak_year}",
+                money(peak)
+            ),
+            format!(
+                "From {first} cash reaches {name} faster than withdrawals spend it, and sits \
+                 there uninvested."
+            ),
+            "of uninvested cash",
+        )
+    };
+    let through = if Some(last) == ctx.results.cash_flows.last().map(|c| c.year) {
+        "to the plan's end".to_string()
+    } else {
+        format!("through {last}")
+    };
+    Draft {
+        rule: "cash_accumulates",
+        kind: Kind::Fix,
+        section: Section::Portfolio,
+        title,
+        summary,
+        reasoning: format!(
+            "On the median path {name} ends {first} with {} {held}, {:.1} years of that year's \
+             {} spending. It stays above two years of spending for {} year-ends, {through}, and \
+             peaks at {} in {peak_year}.{cause}{fix}",
+            money(cash_first),
+            if spent_first > 0.0 {
+                cash_first / spent_first
+            } else {
+                0.0
+            },
+            money(spent_first),
+            run.years(),
+            money(peak),
+        ),
+        evidence,
+        paths,
+    }
+}
+
+/// The `ReinvestCash` template for the cash in `account_id`, keeping two
+/// years of `spending` (plan-start dollars) or none: in place for an
+/// investment account, into the plan's largest taxable account for a bank.
+/// The account it invests in and the changes, or why there is no path.
+pub(super) fn reinvest_path(
+    ctx: &Ctx,
+    account_id: i64,
+    spending: Option<f64>,
+) -> Result<(i64, Vec<Change>), String> {
+    let name = ctx.account_name(account_id);
+    let to = if ctx.graph.bank.contains_key(&account_id) {
+        largest_taxable(ctx.graph).ok_or_else(|| {
+            "The plan has no taxable account with holdings to reinvest the cash in.".to_string()
+        })?
+    } else {
+        account_id
+    };
+    if holdings(ctx.graph, to).is_empty() {
+        return Err(format!("{name} holds no investments to buy with the cash."));
+    }
+    let template = Template::ReinvestCash(ReinvestCashParams {
+        name: None,
+        from_account_id: RowRef::Id(account_id),
+        to_account_id: Some(RowRef::Id(to)),
+        buffer_years: Some(if spending.is_some() { 2.0 } else { 0.0 }),
+        annual_spending: spending.map(f64::round),
+    });
+    expand_template_in(ctx.graph, "", &template)
+        .map(|expansion| (to, expansion.changes))
+        .map_err(|e| format!("Reinvesting the cash does not fit this plan: {e}."))
 }
 
 /// Accounts with a contribution limit that no event ever pays into, in a plan

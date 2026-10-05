@@ -87,6 +87,7 @@ fn results() -> Results {
                 account_id: id,
                 label: format!("account {id}"),
                 values: vec![1000.0 * id as f64; dates.len()],
+                cash: None,
             })
             .collect(),
         series_percentile: Some(0.5),
@@ -278,6 +279,13 @@ impl ToolHost for Tools {
 
     fn preflight(&self) -> Result<Value, String> {
         Ok(json!({"issues": [{"code": "no_inflation", "severity": "warning"}], "can_run": true}))
+    }
+
+    fn expand_template(
+        &self,
+        request: &finplan_plan::templates::TemplateRequest,
+    ) -> Result<finplan_plan::templates::Expansion, String> {
+        request.expand_in(&self.graph).map_err(|e| e.to_string())
     }
 
     fn goal_seek<'a>(
@@ -3392,6 +3400,61 @@ fn document_answer_and_description_evidence_is_checked_against_its_source() {
             .contains("no user description")
     );
     assert!(check(json!({"ref": "answer", "question_key": "bonus"})).is_err());
+}
+
+#[tokio::test]
+async fn the_review_expands_its_templates_against_the_plan() {
+    let script = Script::new(vec![
+        reply(
+            "tool_use",
+            json!([
+                call(
+                    "a",
+                    "expand_template",
+                    json!({"kind": "reinvest_cash", "params": {"from_account_id": 6,
+                           "annual_spending": 100000}})
+                ),
+                call(
+                    "b",
+                    "expand_template",
+                    json!({"kind": "salary", "params": {"to_account_id": 6,
+                           "annual_amount": 1000}})
+                ),
+                call(
+                    "c",
+                    "expand_template",
+                    json!({"kind": "reinvest_cash", "params": {"from_account_id": 3,
+                           "to_account_id": 1}})
+                ),
+            ]),
+        ),
+        reply("end_turn", json!([])),
+    ]);
+    let client = AiClient::new(settings(), script.clone(), None);
+    generate(&client, &context(&[]), &Tools::new())
+        .await
+        .unwrap();
+    let requests = script.requests();
+    // USAA's cash above two years of $100k moves into Vanguard, the largest
+    // taxable account, which buys its holdings.
+    let expansion = json_result(&requests, 1, "a");
+    let event = &expansion["changes"][0]["value"];
+    assert_eq!(event["effects"][0]["kind"], "CashTransfer");
+    assert_eq!(event["effects"][0]["to_account_id"], 1);
+    assert_eq!(
+        event["effects"][0]["amount"]["source"],
+        "max(0, cash(source) - inflation(200000))"
+    );
+    // Only the review's templates, and the plan's rules for them.
+    let (refused, is_error) = result_for(&requests, 1, "b");
+    assert!(
+        is_error && refused.contains("only reinvest_cash"),
+        "{refused}"
+    );
+    let (refused, is_error) = result_for(&requests, 1, "c");
+    assert!(is_error && refused.contains("in place"), "{refused}");
+    // Its params are in the cached reference.
+    assert!(prompt::reference().contains("ReinvestCashParams"));
 }
 
 #[tokio::test]
