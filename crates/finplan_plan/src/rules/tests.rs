@@ -17,6 +17,7 @@ use super::*;
 use crate::results::funding::{AccountCount, FundingDiagnostics, YearCount};
 use crate::results::view::{AccountSeries, Band, CashFlow, InflationPoint, Stats};
 use crate::suggest::{ChangeOp, ChangeTarget, ResolvedChange, resolve};
+use crate::templates::RowRef;
 
 const FIRST: i64 = 2026;
 const LAST: i64 = 2095;
@@ -96,6 +97,7 @@ fn results() -> Results {
             account_id: id,
             label: format!("account {id}"),
             values: points.iter().map(|(d, y)| at(id, *y, d)).collect(),
+            cash: None,
         })
         .collect();
     let net_worth = points
@@ -838,7 +840,7 @@ fn applying_rmd_missing_makes_the_run_take_rmds() {
 // ── rmd_into_investment_cash ────────────────────────────────────────────────
 
 #[test]
-fn an_rmd_paid_into_an_investment_account_is_retargeted_to_the_bank() {
+fn an_rmd_paid_into_an_investment_account_is_retargeted_or_invested_in_place() {
     let mut g = graph();
     let id = add_event(
         &mut g,
@@ -857,7 +859,35 @@ fn an_rmd_paid_into_an_investment_account_is_retargeted_to_the_bank() {
         "{}",
         d.reasoning
     );
-    let [change] = changes(d).try_into().expect("one change");
+    let [bank, in_place] = d.paths.as_slice() else {
+        panic!("two paths: {:#?}", d.paths);
+    };
+    assert!(bank.recommended && !in_place.recommended);
+    assert_eq!(in_place.label, "Invest the cash in Vanguard each year");
+
+    // The second path invests the cash in Vanguard's own holdings, keeping none.
+    let [reinvest] = in_place
+        .changes()
+        .cloned()
+        .collect::<Vec<_>>()
+        .try_into()
+        .unwrap();
+    let body = reinvest.value.unwrap();
+    let effects = body["effects"].as_array().unwrap();
+    assert!(effects.iter().all(|e| e["kind"] == "AssetPurchase"
+        && e["from_account_id"] == 1
+        && e["to_account_id"] == 1));
+    assert_eq!(
+        effects.last().unwrap()["amount"]["source"],
+        "max(0, cash(source))"
+    );
+
+    let [change] = bank
+        .changes()
+        .cloned()
+        .collect::<Vec<_>>()
+        .try_into()
+        .unwrap();
     assert_eq!(change.op, ChangeOp::Replace);
     assert_eq!(change.target, ChangeTarget::Event(id));
     assert_eq!(change.path, "/effects/0/to_account_id");
@@ -880,6 +910,338 @@ fn rmd_into_investment_cash_stays_quiet_where_it_should() {
                "effects": [{"kind": "ApplyRmd", "to_account_id": 6}]}),
     );
     assert!(!rules_of(&review(&g, &results())).contains_key("rmd_into_investment_cash"));
+}
+
+// ── cash_accumulates ────────────────────────────────────────────────────────
+
+/// The fixture run with USAA spending its cash down until 2059, then
+/// gaining $5M a year from 2060.
+fn usaa_builds_up_from_2060() -> Results {
+    let mut r = results();
+    for year in FIRST..=LAST {
+        let cash = if year < 2060 {
+            10e3
+        } else {
+            5e6 * (year - 2059) as f64
+        };
+        set_usaa(&mut r, year, cash);
+    }
+    r
+}
+
+#[test]
+fn cash_building_up_in_the_bank_is_reinvested_in_the_largest_taxable_account() {
+    let g = graph();
+    let drafts = review(&g, &usaa_builds_up_from_2060());
+    let d = only(&drafts, "cash_accumulates");
+    assert_catalogued(&drafts);
+    assert_changes_resolve(&g, &drafts);
+    // Not idle from the start, so not idle_bank_cash's.
+    assert!(!rules_of(&drafts).contains_key("idle_bank_cash"));
+    assert_eq!((d.kind, d.section), (Kind::Fix, Section::Portfolio));
+    assert_eq!(
+        d.title,
+        "USAA builds up cash from 2060, peaking at $180M in 2095"
+    );
+    assert!(
+        d.reasoning
+            .contains("It stays above two years of spending for 36 year-ends, to the plan's end"),
+        "{}",
+        d.reasoning
+    );
+    assert!(d.evidence.contains(&Evidence::Stat {
+        name: "first year of the build-up".into(),
+        value: 2060.0,
+    }));
+    assert!(d.evidence.contains(&Evidence::Ledger {
+        year: 2060,
+        event_id: None,
+        account_id: Some(6),
+    }));
+
+    // One path: a yearly event moving USAA's cash above two years of the
+    // lowest real spending from 2060 on into Vanguard, which then buys.
+    let [path] = d.paths.as_slice() else {
+        panic!("one path");
+    };
+    assert_eq!(
+        path.label,
+        "Reinvest cash above two years of spending in Vanguard"
+    );
+    let [change] = changes(d).try_into().expect("one change");
+    let body = change.value.unwrap();
+    assert_eq!(
+        body["trigger"]["start_condition"],
+        json!({"kind": "Date", "on_date": "2026-12-30"})
+    );
+    let effects = body["effects"].as_array().unwrap();
+    assert_eq!(effects[0]["kind"], "CashTransfer");
+    assert_eq!(
+        (&effects[0]["from_account_id"], &effects[0]["to_account_id"]),
+        (&json!(6), &json!(1))
+    );
+    // 250k a year in plan-start dollars: 2 × 250,000.
+    assert_eq!(
+        effects[0]["amount"]["source"],
+        "max(0, cash(source) - inflation(500000))"
+    );
+    assert!(effects[1..].iter().all(|e| e["kind"] == "AssetPurchase"
+        && e["from_account_id"] == 1
+        && e["to_account_id"] == 1));
+    let description = body["description"].as_str().unwrap();
+    assert!(
+        description.contains("split by their weights at the plan's start (2026-09-03)"),
+        "{description}"
+    );
+}
+
+#[test]
+fn cash_accumulates_stays_quiet_where_it_should() {
+    // The fixture's USAA is idle from the first year: idle_bank_cash's case.
+    let drafts = review(&graph(), &results());
+    assert!(rules_of(&drafts).contains_key("idle_bank_cash"));
+    assert!(!rules_of(&drafts).contains_key("cash_accumulates"));
+
+    // Two year-ends above the line are not a build-up.
+    let mut r = results();
+    for year in FIRST..=LAST {
+        set_usaa(
+            &mut r,
+            year,
+            if (2060..=2061).contains(&year) {
+                5e6
+            } else {
+                10e3
+            },
+        );
+    }
+    assert!(!rules_of(&review(&graph(), &r)).contains_key("cash_accumulates"));
+
+    // Cash that stays idle from the start never counts again later, even
+    // when it climbs further.
+    let mut r = results();
+    for year in FIRST..=LAST {
+        set_usaa(&mut r, year, 1e6 + 100e3 * (year - FIRST) as f64);
+    }
+    let drafts = review(&graph(), &r);
+    assert!(rules_of(&drafts).contains_key("idle_bank_cash"));
+    assert!(!rules_of(&drafts).contains_key("cash_accumulates"));
+}
+
+/// The median path of `graph`, as the API serves it.
+fn run(graph: &ScenarioGraph) -> Results {
+    use finplan_core::model::MonteCarloConfig;
+    use finplan_core::simulation::monte_carlo_simulate_with_config;
+    let compiled = crate::compile::compile(graph).unwrap();
+    let config = MonteCarloConfig {
+        iterations: 9,
+        percentiles: vec![0.5],
+        compute_mean: false,
+        seed: Some(11),
+        ..MonteCarloConfig::default()
+    };
+    let summary = monte_carlo_simulate_with_config(&compiled.config, &config).unwrap();
+    crate::results::project(&compiled, &summary, &Default::default())
+        .results(1, 1, None)
+        .unwrap()
+}
+
+/// 71 at the start in 2026, retired: $40k a year spent from Checking, topped
+/// up from investments, and RMDs from a $3M 401(k) from 73 paid into
+/// `rmds_into` ("checking" or "brokerage"), which outrun the spending.
+fn rmd_surplus_plan(rmds_into: &str) -> (ScenarioGraph, i64, i64) {
+    use crate::templates::{
+        RecurringExpenseParams, Template, allocation_asset, bank_account, expand_template,
+        investment_account, position,
+    };
+    let mut g = crate::templates::tests::blank_graph();
+    g.scenario.birth_date = Some("1955-01-01".into());
+    g.scenario.duration_years = 15;
+    let profile = RowRef::Id(*g.return_profiles.keys().min().unwrap());
+    let mut changes = vec![
+        bank_account("checking", "Checking", 60e3, profile.clone(), None),
+        allocation_asset("fund", "Fund", profile.clone(), None),
+        investment_account(
+            "k401",
+            "401(k)",
+            "TaxDeferred",
+            profile.clone(),
+            None,
+            vec![position(&RowRef::new("fund"), 3e6, 3e6)],
+        ),
+        investment_account(
+            "brokerage",
+            "Brokerage",
+            "Taxable",
+            profile,
+            None,
+            vec![position(&RowRef::new("fund"), 500e3, 500e3)],
+        ),
+    ];
+    let spending = Template::RecurringExpense(RecurringExpenseParams {
+        name: "Spending".into(),
+        from_account_id: RowRef::new("checking"),
+        amount: 40e3,
+        amount_parameter: None,
+        parameter_interval: None,
+        interval: None,
+        inflation_adjusted: None,
+        start: None,
+        end: None,
+        fund_from_investments: true,
+        sort_order: None,
+    });
+    changes.extend(expand_template("", &spending).unwrap().changes);
+    changes.push(Change {
+        op: ChangeOp::Add,
+        target: ChangeTarget::NewEvent("rmd".into()),
+        path: String::new(),
+        expect: None,
+        value: Some(json!({
+            "name": "RMD",
+            "trigger": {"kind": "Repeating", "interval": "Yearly",
+                        "start_condition": {"kind": "Age", "years": 73}},
+            "effects": [{"kind": "ApplyRmd", "to_account_id": {"$new": rmds_into}}],
+        })),
+    });
+    let stepped = crate::suggest::resolve_steps(&g, &[changes], &Default::default())
+        .unwrap()
+        .unwrap();
+    let id = |key: &str| {
+        stepped
+            .graph
+            .accounts
+            .iter()
+            .find(|a| a.name == key)
+            .unwrap()
+            .id
+    };
+    let (checking, brokerage) = (id("Checking"), id("Brokerage"));
+    (stepped.graph, checking, brokerage)
+}
+
+/// Apply the one path of `d` to `g`.
+fn apply_path(g: &ScenarioGraph, d: &Draft) -> ScenarioGraph {
+    let steps: Vec<Vec<Change>> = d.paths[0].steps.iter().map(|s| s.changes.clone()).collect();
+    crate::suggest::resolve_steps(g, &steps, &Default::default())
+        .unwrap()
+        .unwrap()
+        .graph
+}
+
+/// Every year-end of `account`'s cash on the shown path, with that year's
+/// spending, after the plan's partial first year.
+fn cash_against_spending(r: &Results, account: i64) -> Vec<(i64, f64, f64)> {
+    let dates = &r.bands[0].dates;
+    let series = r
+        .account_series
+        .iter()
+        .find(|s| s.account_id == account)
+        .unwrap();
+    let cash = series.cash.as_ref().unwrap_or(&series.values);
+    r.cash_flows
+        .iter()
+        .skip(1)
+        .filter_map(|flow| {
+            let i = dates
+                .iter()
+                .position(|d| *d == format!("{}-12-31", flow.year))?;
+            Some((flow.year, cash[i], flow.expenses))
+        })
+        .collect()
+}
+
+#[test]
+fn rmds_beyond_spending_build_up_in_the_bank_and_the_path_stops_it() {
+    let (g, checking, brokerage) = rmd_surplus_plan("checking");
+    let r = run(&g);
+    let drafts = review(&g, &r);
+    let d = only(&drafts, "cash_accumulates");
+    assert_catalogued(&drafts);
+    assert_changes_resolve(&g, &drafts);
+    assert!(!rules_of(&drafts).contains_key("idle_bank_cash"));
+    assert!(
+        d.title.starts_with("Checking builds up cash from "),
+        "{}",
+        d.title
+    );
+    assert!(
+        d.reasoning
+            .contains("From 2028, the RMDs paid into Checking exceed what the plan spends."),
+        "{}",
+        d.reasoning
+    );
+    assert_eq!(
+        d.paths[0].label,
+        "Reinvest cash above two years of spending in Brokerage"
+    );
+    let before = cash_against_spending(&r, checking);
+    assert!(
+        before.last().unwrap().1 > 4.0 * before.last().unwrap().2,
+        "{before:?}"
+    );
+
+    // With the path applied, the cash above the buffer goes to Brokerage each
+    // December 30, so no year-end shows a build-up and the note is gone.
+    let fixed = apply_path(&g, d);
+    let r = run(&fixed);
+    for (year, cash, spent) in cash_against_spending(&r, checking) {
+        assert!(cash <= 2.2 * spent, "{year}: {cash} against {spent}");
+    }
+    let drafts = review(&fixed, &r);
+    assert!(
+        !rules_of(&drafts).contains_key("cash_accumulates"),
+        "{drafts:#?}"
+    );
+    // Brokerage invests what arrives: none of it sits there as cash.
+    for (year, cash, _) in cash_against_spending(&r, brokerage) {
+        assert!(cash < 1.0, "{year}: {cash} uninvested in Brokerage");
+    }
+}
+
+#[test]
+fn rmds_into_a_brokerage_build_up_uninvested_and_are_invested_in_place() {
+    let (g, _, brokerage) = rmd_surplus_plan("brokerage");
+    let r = run(&g);
+    // The run keeps the brokerage's cash beside its balance.
+    assert!(
+        r.account_series
+            .iter()
+            .find(|s| s.account_id == brokerage)
+            .unwrap()
+            .cash
+            .is_some()
+    );
+    let drafts = review(&g, &r);
+    let d = only(&drafts, "cash_accumulates");
+    assert_changes_resolve(&g, &drafts);
+    assert!(
+        d.title
+            .starts_with("Cash builds up uninvested in Brokerage from "),
+        "{}",
+        d.title
+    );
+    assert_eq!(
+        d.paths[0].label,
+        "Invest Brokerage's cash above two years of spending"
+    );
+    // In place: purchases only, no transfer.
+    let [change] = changes(d).try_into().expect("one change");
+    let body = change.value.unwrap();
+    assert!(
+        body["effects"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|e| e["kind"] == "AssetPurchase")
+    );
+
+    let fixed = apply_path(&g, d);
+    let r = run(&fixed);
+    for (year, cash, spent) in cash_against_spending(&r, brokerage) {
+        assert!(cash <= 2.2 * spent, "{year}: {cash} against {spent}");
+    }
+    assert!(!rules_of(&review(&fixed, &r)).contains_key("cash_accumulates"));
 }
 
 // ── the catalogue ───────────────────────────────────────────────────────────

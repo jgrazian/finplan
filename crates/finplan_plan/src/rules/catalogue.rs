@@ -157,8 +157,20 @@ const CATALOGUE: &[PlanCheck] = &[
         Rule,
         Portfolio,
         Check,
-        "A bank account holding over two years of spending, year after year, on the shown path.",
+        "A bank account holding over two years of spending from the plan's start, year after \
+         year, on the shown path.",
         "none",
+    ),
+    check(
+        "cash_accumulates",
+        Rule,
+        Portfolio,
+        Fix,
+        "Cash, in a bank or uninvested in an investment account, that builds up above two years \
+         of spending for three or more year-ends after the plan begins, typically from the first \
+         RMD year.",
+        "A yearly Reinvest cash event that invests the cash above two years of spending in the \
+         largest taxable account's holdings, or in place.",
     ),
     check(
         "unused_contribution_limits",
@@ -210,7 +222,8 @@ const CATALOGUE: &[PlanCheck] = &[
         Check,
         "An Apply RMD that pays into an investment account, where the cash sits unspent and \
          uninvested.",
-        "Pay the RMD into the main bank account.",
+        "Pay the RMD into the main bank account, or invest the cash in place with a yearly \
+         Reinvest cash event.",
     ),
     check(
         "shortfall_account_concentration",

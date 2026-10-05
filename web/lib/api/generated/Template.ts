@@ -5,6 +5,7 @@ import type { JobLossParams } from "./JobLossParams";
 import type { LargeExpenseParams } from "./LargeExpenseParams";
 import type { MarketCrashParams } from "./MarketCrashParams";
 import type { RecurringExpenseParams } from "./RecurringExpenseParams";
+import type { ReinvestCashParams } from "./ReinvestCashParams";
 import type { RetirementParams } from "./RetirementParams";
 import type { SalaryParams } from "./SalaryParams";
 import type { SocialSecurityParams } from "./SocialSecurityParams";
@@ -21,4 +22,5 @@ export type Template =
   | { "kind": "social_security" } & SocialSecurityParams
   | { "kind": "market_crash" } & MarketCrashParams
   | { "kind": "large_expense" } & LargeExpenseParams
-  | { "kind": "job_loss" } & JobLossParams;
+  | { "kind": "job_loss" } & JobLossParams
+  | { "kind": "reinvest_cash" } & ReinvestCashParams;

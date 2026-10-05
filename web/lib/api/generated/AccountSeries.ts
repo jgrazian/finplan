@@ -4,4 +4,10 @@ export type AccountSeries = {
   account_id: number;
   label: string;
   values: Array<number>;
+  /**
+   * An investment account's uninvested cash at each point, part of
+   * `values`. Absent for other accounts, and for runs stored before it
+   * was kept.
+   */
+  cash?: Array<number>;
 };

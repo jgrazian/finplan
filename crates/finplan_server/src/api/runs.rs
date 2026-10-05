@@ -439,8 +439,8 @@ pub(crate) async fn results(
         None
     };
 
-    let account_rows: Vec<(i64, String, f64)> = sqlx::query_as(
-        "SELECT p.account_id, a.name, p.value
+    let account_rows: Vec<(i64, String, f64, Option<f64>)> = sqlx::query_as(
+        "SELECT p.account_id, a.name, p.value, p.cash
            FROM run_account_points p JOIN run_account_labels a ON a.account_id = p.account_id AND a.run_id = p.run_id
           WHERE p.run_id = ?1 AND p.percentile IS ?2
           ORDER BY a.sort_order, p.account_id, p.step",
@@ -450,17 +450,33 @@ pub(crate) async fn results(
     .fetch_all(&state.db)
     .await?;
 
-    let mut account_series: Vec<AccountSeries> = Vec::new();
-    for (account_id, label, value) in account_rows {
-        match account_series.last_mut() {
-            Some(series) if series.account_id == account_id => series.values.push(value),
-            _ => account_series.push(AccountSeries {
-                account_id,
-                label,
-                values: vec![value],
-            }),
+    // Each account's values, and its cash beside them until the series is
+    // complete.
+    let mut series: Vec<(AccountSeries, Vec<Option<f64>>)> = Vec::new();
+    for (account_id, label, value, cash) in account_rows {
+        match series.last_mut() {
+            Some((s, points)) if s.account_id == account_id => {
+                s.values.push(value);
+                points.push(cash);
+            }
+            _ => series.push((
+                AccountSeries {
+                    account_id,
+                    label,
+                    values: vec![value],
+                    cash: None,
+                },
+                vec![cash],
+            )),
         }
     }
+    let account_series: Vec<AccountSeries> = series
+        .into_iter()
+        .map(|(mut s, points)| {
+            s.cash = finplan_plan::results::view::cash_series(points);
+            s
+        })
+        .collect();
 
     let flow_rows: Vec<(i64, f64, f64, f64, f64, f64, f64)> = sqlx::query_as(
         "SELECT year, income, expenses, contributions, withdrawals, appreciation, net_cash_flow

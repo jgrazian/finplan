@@ -194,6 +194,7 @@ export type { RecoveryEmail } from "./RecoveryEmail";
 export type { RecurringExpenseParams } from "./RecurringExpenseParams";
 export type { RefKind } from "./RefKind";
 export type { RegisterCredentials } from "./RegisterCredentials";
+export type { ReinvestCashParams } from "./ReinvestCashParams";
 export type { ReorderRequest } from "./ReorderRequest";
 export type { RepaymentSpec } from "./RepaymentSpec";
 export type { ResetPassword } from "./ResetPassword";

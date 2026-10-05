@@ -58,6 +58,7 @@ const KIND_ORDER: Record<SuggestionKind, number> = { add: 0, fix: 1, check: 2, s
 const RULE_TOPIC: Record<string, string> = {
   cost_basis_equals_value: "cost basis",
   idle_bank_cash: "idle cash",
+  cash_accumulates: "cash building up",
   unused_contribution_limits: "contributions",
   sweep_sells_while_cash: "sales you don't need",
   liability_payment_inflation_adjusted: "loan payment",

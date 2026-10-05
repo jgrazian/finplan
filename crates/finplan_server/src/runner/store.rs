@@ -229,14 +229,15 @@ async fn write_path(
 
     for point in &path.account_points {
         sqlx::query(
-            "INSERT INTO run_account_points (run_id, percentile, account_id, step, value)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
+            "INSERT INTO run_account_points (run_id, percentile, account_id, step, value, cash)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
         )
         .bind(run_id)
         .bind(percentile)
         .bind(point.account_id)
         .bind(point.step as i64)
         .bind(point.value)
+        .bind(point.cash)
         .execute(&mut **tx)
         .await?;
     }

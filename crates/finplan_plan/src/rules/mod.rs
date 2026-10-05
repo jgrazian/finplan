@@ -185,6 +185,7 @@ const RULES: &[(&str, Rule)] = &[
         portfolio::cost_basis_equals_value,
     ),
     ("idle_bank_cash", portfolio::idle_bank_cash),
+    ("cash_accumulates", portfolio::cash_accumulates),
     (
         "unused_contribution_limits",
         portfolio::unused_contribution_limits,
@@ -276,6 +277,8 @@ pub(super) struct Ctx<'a> {
     /// The shown path's dates, aligned with each `account_series` entry.
     dates: Vec<&'a str>,
     series: HashMap<i64, &'a [f64]>,
+    /// Investment accounts' uninvested cash, where the run kept it.
+    cash: HashMap<i64, &'a [f64]>,
 }
 
 impl<'a> Ctx<'a> {
@@ -297,12 +300,18 @@ impl<'a> Ctx<'a> {
             .iter()
             .map(|s| (s.account_id, s.values.as_slice()))
             .collect();
+        let cash = results
+            .account_series
+            .iter()
+            .filter_map(|s| Some((s.account_id, s.cash.as_deref()?)))
+            .collect();
         Ctx {
             graph,
             results,
             events,
             dates,
             series,
+            cash,
         }
     }
 
@@ -341,6 +350,19 @@ impl<'a> Ctx<'a> {
             .into_iter()
             .find(|(d, _)| *d == date)
             .map(|(_, v)| v)
+    }
+
+    /// The cash an account holds at the end of `year`: a bank's balance, an
+    /// investment account's uninvested cash. None for other accounts, and for
+    /// an investment account in a run that did not keep its cash.
+    pub fn year_end_cash(&self, account_id: i64, year: i64) -> Option<f64> {
+        if self.graph.bank.contains_key(&account_id) {
+            return self.year_end(account_id, year);
+        }
+        let values = self.cash.get(&account_id)?;
+        let date = format!("{year:04}-12-31");
+        let i = self.dates.iter().position(|d| *d == date)?;
+        values.get(i).copied()
     }
 
     /// The last balance dated strictly before `date`.
@@ -510,7 +532,7 @@ pub(super) fn fixed_amount(amount: &AmountSpec, inflation: f64) -> Option<(f64, 
 // ── formatting ──────────────────────────────────────────────────────────────
 
 /// Dollars the way the Review tab writes them: `$38,200`, `$218k`, `$1.45M`.
-pub(super) fn money(value: f64) -> String {
+pub(crate) fn money(value: f64) -> String {
     let sign = if value < 0.0 { "−" } else { "" };
     let abs = value.abs();
     let body = if abs >= 1e6 {

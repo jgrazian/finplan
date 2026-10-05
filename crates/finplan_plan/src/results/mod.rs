@@ -14,7 +14,8 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use finplan_core::model::{
-    AccountId, MonteCarloSummary, SimulationResult, WarningKind, final_net_worth,
+    AccountId, AccountSnapshotFlavor, MonteCarloSummary, SimulationResult, WarningKind,
+    final_net_worth,
 };
 use serde::{Deserialize, Serialize};
 
@@ -68,6 +69,10 @@ pub struct AccountPoint {
     pub account_id: i64,
     pub step: usize,
     pub value: f64,
+    /// An investment account's uninvested cash, part of `value`. None for
+    /// other accounts, and for points stored before it was kept.
+    #[serde(default)]
+    pub cash: Option<f64>,
 }
 
 /// A year's cash flows on one path.
@@ -303,10 +308,15 @@ fn project_path(
             let Some(account_id) = compiled.id_map.account_db_id(account.account_id) else {
                 continue;
             };
+            let cash = match &account.flavor {
+                AccountSnapshotFlavor::Investment { cash, .. } => Some(*cash),
+                _ => None,
+            };
             account_points.push(AccountPoint {
                 account_id,
                 step,
                 value: account.total_value(),
+                cash,
             });
         }
     }
@@ -536,19 +546,19 @@ impl RunResults {
 
         let mut account_series = Vec::new();
         if let Some(shown) = shown {
-            let mut values: HashMap<i64, Vec<f64>> = HashMap::new();
+            let mut values: HashMap<i64, (Vec<f64>, Vec<Option<f64>>)> = HashMap::new();
             for point in &shown.account_points {
-                values
-                    .entry(point.account_id)
-                    .or_default()
-                    .push(point.value);
+                let (account, cash) = values.entry(point.account_id).or_default();
+                account.push(point.value);
+                cash.push(point.cash);
             }
             for label in &self.account_labels {
-                if let Some(values) = values.remove(&label.account_id) {
+                if let Some((values, cash)) = values.remove(&label.account_id) {
                     account_series.push(AccountSeries {
                         account_id: label.account_id,
                         label: label.label.clone(),
                         values,
+                        cash: view::cash_series(cash),
                     });
                 }
             }

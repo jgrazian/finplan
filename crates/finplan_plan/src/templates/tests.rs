@@ -11,7 +11,7 @@ use crate::suggest::{ChangeProblem, Created, StepProblems, resolve_steps};
 
 /// The default snapshot's assumptions (a scenario, return profiles, tax
 /// config) with every account, asset and event removed.
-fn blank_graph() -> ScenarioGraph {
+pub(crate) fn blank_graph() -> ScenarioGraph {
     let mut plan: Value =
         serde_json::from_str(include_str!("../../testdata/default_snapshot.json")).unwrap();
     let root = plan.as_object_mut().unwrap();
@@ -374,4 +374,157 @@ fn two_expansions_without_a_prefix_collide_on_their_keys() {
         .changes,
     );
     f.apply(&[f.base(), namespaced]).unwrap();
+}
+
+/// The base accounts, a taxable account holding Fund and Bonds 3:1, and
+/// $40k a year of spending from Checking.
+fn reinvest_plan(f: &Fixture) -> ScenarioGraph {
+    let taxable = vec![
+        allocation_asset("bonds", "Bonds", RowRef::Id(f.profile), None),
+        investment_account(
+            "taxable",
+            "Taxable",
+            "Taxable",
+            RowRef::Id(f.profile),
+            None,
+            vec![
+                position(&RowRef::new("fund"), 75_000., 75_000.),
+                position(&RowRef::new("bonds"), 25_000., 25_000.),
+            ],
+        ),
+    ];
+    let spending = request(json!({"kind": "recurring_expense", "name": "Spending",
+                                  "from_account_id": {"$new": "checking"}, "amount": 40000}))
+    .expand()
+    .unwrap()
+    .changes;
+    f.apply(&[f.base(), taxable, spending]).unwrap()
+}
+
+/// The one event an expansion adds, as written.
+fn added_event(expansion: &Expansion) -> Value {
+    let [change] = expansion.changes.as_slice() else {
+        panic!("one change: {:#?}", expansion.changes);
+    };
+    assert_eq!(
+        change.target,
+        ChangeTarget::NewEvent("reinvest_cash".into())
+    );
+    change.value.clone().unwrap()
+}
+
+#[test]
+fn reinvest_cash_moves_bank_cash_above_the_buffer_and_buys_at_the_holdings_weights() {
+    let f = Fixture::new();
+    let g = reinvest_plan(&f);
+    let id = |name: &str| g.accounts.iter().find(|a| a.name == name).unwrap().id;
+    let checking = id("Checking");
+
+    // Without the plan it can neither size the buffer nor split the purchases.
+    let r = request(json!({"kind": "reinvest_cash", "from_account_id": checking}));
+    assert!(
+        r.expand()
+            .unwrap_err()
+            .to_string()
+            .contains("reads the plan")
+    );
+
+    // From the bank, into the largest taxable account, keeping two years of
+    // the plan's $40k spending.
+    let expansion = r.expand_in(&g).unwrap();
+    let body = added_event(&expansion);
+    assert_eq!(body["name"], "Reinvest cash");
+    assert_eq!(
+        body["trigger"],
+        json!({"kind": "Repeating", "interval": "Yearly", "end_condition": null,
+               "max_occurrences": null,
+               "start_condition": {"kind": "Date", "on_date": "2026-12-30"}})
+    );
+    let taxable = id("Taxable");
+    let effects = body["effects"].as_array().unwrap();
+    assert_eq!(
+        effects[0],
+        json!({"kind": "CashTransfer", "from_account_id": checking, "to_account_id": taxable,
+               "amount": {"kind": "Expression",
+                          "source": "max(0, cash(source) - inflation(80000))"}})
+    );
+    // Fund then Bonds: each takes its weight of what the ones before it left.
+    let sources: Vec<&Value> = effects[1..]
+        .iter()
+        .map(|e| &e["amount"]["source"])
+        .collect();
+    assert_eq!(
+        sources,
+        [
+            &json!("0.75 * max(0, cash(source))"),
+            &json!("max(0, cash(source))")
+        ]
+    );
+    assert!(effects[1..].iter().all(|e| e["kind"] == "AssetPurchase"
+        && e["from_account_id"] == taxable
+        && e["to_account_id"] == taxable));
+    let description = body["description"].as_str().unwrap();
+    assert!(
+        description.contains("above 2 years of spending ($80,000 in 2026 dollars")
+            && description.contains("(2026-09-03): 75% Fund, 25% Bonds."),
+        "{description}"
+    );
+    let applied = resolve_steps(&g, &[expansion.changes], &Created::new())
+        .unwrap()
+        .unwrap()
+        .graph;
+    crate::compile::compile(&applied).expect("compiles");
+    assert_eq!(event(&applied, "Reinvest cash").effects.len(), 3);
+}
+
+#[test]
+fn reinvest_cash_in_an_investment_account_buys_in_place() {
+    let f = Fixture::new();
+    let g = reinvest_plan(&f);
+    let id = |name: &str| g.accounts.iter().find(|a| a.name == name).unwrap().id;
+    let expand = |mut params: Value| {
+        params["kind"] = json!("reinvest_cash");
+        request(params).expand_in(&g)
+    };
+
+    // A taxable account's own cash, with a $25k buffer and a name.
+    let taxable = id("Taxable");
+    let expansion = expand(json!({"from_account_id": taxable, "name": "Invest RMDs",
+                                  "buffer_years": 0.5, "annual_spending": 50000}))
+    .unwrap();
+    let body = added_event(&expansion);
+    assert_eq!(body["name"], "Invest RMDs");
+    let effects = body["effects"].as_array().unwrap();
+    assert!(effects.iter().all(|e| e["kind"] == "AssetPurchase"
+        && e["from_account_id"] == taxable
+        && e["to_account_id"] == taxable));
+    assert_eq!(
+        effects[0]["amount"]["source"],
+        "0.75 * max(0, cash(source) - inflation(25000))"
+    );
+    // A 401(k)'s cash is invested in place too, and with no buffer, all of it.
+    let k401 = id("401(k)");
+    let body = added_event(&expand(json!({"from_account_id": k401, "buffer_years": 0})).unwrap());
+    assert_eq!(
+        body["effects"][0]["amount"]["source"],
+        "max(0, cash(source))"
+    );
+    assert!(
+        body["description"]
+            .as_str()
+            .unwrap()
+            .starts_with("Each December 30, invests all of 401(k)'s cash in its holdings")
+    );
+
+    let bad = |params: Value| expand(params).unwrap_err().to_string();
+    // Moving a 401(k)'s cash out would be a distribution.
+    assert!(bad(json!({"from_account_id": k401, "to_account_id": taxable})).contains("in place"));
+    // Nor can a transfer land in one.
+    assert!(
+        bad(json!({"from_account_id": id("Checking"), "to_account_id": k401}))
+            .contains("into a taxable one")
+    );
+    assert!(bad(json!({"from_account_id": {"$new": "x"}})).contains("already has"));
+    assert!(bad(json!({"from_account_id": 999})).contains("not an account"));
+    assert!(bad(json!({"from_account_id": taxable, "buffer_years": -1})).contains("buffer_years"));
 }

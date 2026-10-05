@@ -2,7 +2,7 @@
 
 use serde_json::json;
 
-use super::portfolio::visit;
+use super::portfolio::{reinvest_path, visit};
 use super::{
     Ctx, Draft, DraftPath, Evidence, Kind, Section, clip, fixed_amount, list, money, rmd_age,
     year_of,
@@ -563,7 +563,7 @@ pub(super) fn rmd_into_investment_cash(ctx: &Ctx) -> Vec<Draft> {
                     account_id: Some(*to_account_id),
                 });
             }
-            let fix = bank.map_or_else(
+            let mut fix = bank.map_or_else(
                 || " The plan has no bank account to pay it into.".to_string(),
                 |id| {
                     format!(
@@ -572,13 +572,15 @@ pub(super) fn rmd_into_investment_cash(ctx: &Ctx) -> Vec<Draft> {
                     )
                 },
             );
-            // Retargeting to the bank is the one path for now; reinvesting the
-            // cash in place joins it once the `ReinvestCash` template exists
-            // (spec 21, with `cash_accumulates`).
-            let paths = bank
+            // Two courses: pay the RMD where spending comes from (recommended
+            // when there is a bank), or keep it here and invest it each year,
+            // the bank holding the plan's cash buffer.
+            let mut paths: Vec<DraftPath> = bank
                 .map(|bank| {
-                    DraftPath::only(
+                    DraftPath::single(
+                        "a",
                         clip(&format!("Pay the RMD into {}", ctx.account_name(bank))),
+                        true,
                         vec![Change {
                             op: ChangeOp::Replace,
                             target: ChangeTarget::Event(event.id),
@@ -590,6 +592,18 @@ pub(super) fn rmd_into_investment_cash(ctx: &Ctx) -> Vec<Draft> {
                 })
                 .into_iter()
                 .collect();
+            if let Ok((_, changes)) = reinvest_path(ctx, *to_account_id, None) {
+                fix.push_str(&format!(
+                    " Or a yearly December 30 event invests the cash in {account}'s own \
+                     holdings."
+                ));
+                paths.push(DraftPath::single(
+                    "b",
+                    clip(&format!("Invest the cash in {account} each year")),
+                    paths.is_empty(),
+                    changes,
+                ));
+            }
             drafts.push(Draft {
                 rule: "rmd_into_investment_cash",
                 kind: Kind::Check,
@@ -599,14 +613,15 @@ pub(super) fn rmd_into_investment_cash(ctx: &Ctx) -> Vec<Draft> {
                     event.name
                 ),
                 summary: format!(
-                    "Cash in {account} is not spent by withdrawals or invested unless an event \
-                     buys with it, so the distributions pile up idle."
+                    "Cash in {account} is not invested unless an event buys with it, so the \
+                     distributions sit idle until a withdrawal spends them."
                 ),
                 reasoning: format!(
                     "{}'s Apply RMD pays each year's distribution into {account}, an investment \
                      account{from}. The distribution is taxed as it leaves the pre-tax account, \
-                     then sits in {account} as cash: sweeps sell holdings, not cash, so \
-                     spending never draws on it, and nothing invests it.{fix}",
+                     then sits in {account} as cash: withdrawals spend it before they sell \
+                     anything, but until then it earns no investment return, and nothing \
+                     invests it.{fix}",
                     event.name
                 ),
                 evidence,

@@ -8,7 +8,8 @@
 //! Groups, one module each:
 //!
 //! - [`plan`]: `preview_changes`, `preview_paths`, `validate_changes`,
-//!   `preflight` — the plan and simulations of it, through a [`ToolHost`].
+//!   `preflight`, `expand_template` — the plan and simulations of it, through
+//!   a [`ToolHost`].
 //!   Simulation-backed tools spend the loop's preview budget, per simulation.
 //! - [`runs`]: `inspect_path`, `cash_flow_breakdown`, `failure_profile` —
 //!   what a stored run shows.
@@ -41,8 +42,9 @@ use serde_json::{Value, json};
 use super::BoxFuture;
 use crate::observability::{AiTool, AiToolOutcome};
 use finplan_plan::suggest::{Change, ChangeProblem, DiffLine};
+use finplan_plan::templates::{Expansion, TemplateRequest};
 
-pub use plan::{MAX_CHANGES, batch_key};
+pub use plan::{MAX_CHANGES, REVIEW_TEMPLATES, batch_key, template_request};
 pub use runs::PathRank;
 
 /// The prompt paragraph describing the tools, for any loop serving them all.
@@ -54,6 +56,7 @@ Tools. Besides preview_changes and submit_suggestion you have:
 - validate_changes(steps): a dry run that only checks a path's steps against the plan (stale `expect`, bad pointers, invalid bodies) and returns their diffs. It costs no preview; use it before spending one.
 - preview_paths(paths): previews two to four paths in one call, on the same random draws, so the comparison is fair. Each path spends one preview from the same budget.
 - preflight(): whether the plan can run at all, and what the app flags about it.
+- expand_template(kind, params): the changes a template writes in this plan, to place in a step. Free.
 - inspect_path(rank, years?) and failure_profile(): the cash flows and balances of a stored path (worst, p10, p25 or median) and where and when failing iterations fail. Ground risk notes in them rather than in guesses.
 - cash_flow_breakdown(rank, years?): a stored path's income, expenses, contributions, withdrawals and taxes split by the event behind each (salary, the house, health care), with each source's share of income and of spending. Free. Use it before saying what drives the spending.
 - reference_facts(topic, year): 401(k), IRA and HSA limits, RMD start age, standard deduction, brackets, Social Security bend points, wage base and full retirement age, and (approximate) state income tax rates. Never quote a statutory figure from memory; call this. Its `status` says published, projected or approximate; say so when the figure is not published.
@@ -104,6 +107,13 @@ pub trait ToolHost: Send + Sync {
         _years: Option<(i64, i64)>,
     ) -> BoxFuture<'a, Result<String, String>> {
         Box::pin(async { Err(unavailable("inspect_path")) })
+    }
+
+    /// Lower a template to its changes. A host that holds the plan expands
+    /// against it ([`TemplateRequest::expand_in`]), which the templates that
+    /// read the plan need; without one, those are refused.
+    fn expand_template(&self, request: &TemplateRequest) -> Result<Expansion, String> {
+        request.expand().map_err(|e| e.to_string())
     }
 
     /// The plan's tax settings, for `estimate_taxes`.
@@ -251,6 +261,7 @@ pub const ESTIMATE_TAXES: &str = "estimate_taxes";
 pub const GOAL_SEEK: &str = "goal_seek";
 pub const CASH_FLOW_BREAKDOWN: &str = "cash_flow_breakdown";
 pub const SENSITIVITY: &str = "sensitivity";
+pub const EXPAND_TEMPLATE: &str = "expand_template";
 
 /// Every shared tool, in the order the model sees them.
 pub const SPECS: &[ToolSpec] = &[
@@ -281,6 +292,13 @@ pub const SPECS: &[ToolSpec] = &[
         schema: plan::empty_schema,
         group: Group::Plan,
         metric: AiTool::Preflight,
+    },
+    ToolSpec {
+        name: EXPAND_TEMPLATE,
+        description: "Lower a template to the changes that write it in this plan, with the `$new` keys they create. reinvest_cash (ReinvestCashParams) adds a yearly December 30 event that invests the cash above a buffer of spending, from a bank into the largest taxable account's holdings or in place in an investment account. Place the changes in a step of a note; use a different key_prefix for each expansion in one path. Free.",
+        schema: plan::expand_template_schema,
+        group: Group::Plan,
+        metric: AiTool::ExpandTemplate,
     },
     ToolSpec {
         name: INSPECT_PATH,
@@ -423,6 +441,7 @@ impl Registry {
             PREVIEW_PATHS => plan::preview_paths(input, env).await,
             VALIDATE => plan::validate(input, env),
             PREFLIGHT => plan::preflight(env),
+            EXPAND_TEMPLATE => plan::expand_template(input, env),
             INSPECT_PATH => runs::inspect_path(input, env).await,
             CASH_FLOW_BREAKDOWN => runs::cash_flow_breakdown(input, env).await,
             SENSITIVITY => sensitivity::run(input, env).await,

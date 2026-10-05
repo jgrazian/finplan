@@ -114,6 +114,20 @@ pub struct AccountSeries {
     pub account_id: i64,
     pub label: String,
     pub values: Vec<f64>,
+    /// An investment account's uninvested cash at each point, part of
+    /// `values`. Absent for other accounts, and for runs stored before it
+    /// was kept.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub cash: Option<Vec<f64>>,
+}
+
+/// A series' cash, when every point has one.
+pub fn cash_series(points: Vec<Option<f64>>) -> Option<Vec<f64>> {
+    if points.is_empty() {
+        return None;
+    }
+    points.into_iter().collect()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
