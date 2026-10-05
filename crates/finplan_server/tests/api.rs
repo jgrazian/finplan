@@ -3239,6 +3239,9 @@ mod parameter_cases;
 #[path = "cases/real_estate.rs"]
 mod real_estate_cases;
 
+#[path = "cases/roth_conversion.rs"]
+mod roth_conversion_cases;
+
 #[path = "cases/results_projection.rs"]
 mod results_projection_cases;
 

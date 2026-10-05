@@ -60,6 +60,7 @@ codes! {
     Horizon => "horizon",
     NoInflation => "no_inflation",
     Assumptions => "assumptions",
+    RothConversionCandidate => "roth_conversion_candidate",
 }
 
 /// Review `g`: compile it, then look for the omissions a run cannot report
@@ -165,6 +166,17 @@ pub fn preflight(g: &ScenarioGraph) -> PreflightReport {
             None,
         );
     }
+    if let Some((account, year)) = roth_conversion_candidate(g) {
+        add(
+            Code::RothConversionCandidate,
+            "info",
+            format!(
+                "{account} holds pre-tax money, and its required minimum distributions begin in {year}, inside the plan. Converting some of it to your Roth account in lower-income years before then can lower the tax on those distributions: Add Roth conversions on the Plan tab."
+            ),
+            "plan",
+            None,
+        );
+    }
     if g.scenario.inflation_profile_id.is_none() {
         add(
             Code::NoInflation,
@@ -189,4 +201,99 @@ pub fn preflight(g: &ScenarioGraph) -> PreflightReport {
     );
     let can_run = !issues.iter().any(|i| i.severity == "error");
     PreflightReport { issues, can_run }
+}
+
+/// A plan a Roth conversion could help: a tax-deferred account with money in
+/// it, a Roth to convert into, no conversion yet, and RMDs that begin before
+/// the plan ends. The largest such account's name and the first RMD year.
+fn roth_conversion_candidate(g: &ScenarioGraph) -> Option<(String, i64)> {
+    let start = g.scenario.start_date.parse::<jiff::civil::Date>().ok()?;
+    let birth = g
+        .scenario
+        .birth_date
+        .as_deref()?
+        .parse::<jiff::civil::Date>()
+        .ok()?;
+    let first_rmd_year = i64::from(birth.year()) + i64::from(crate::templates::RMD_AGE);
+    if first_rmd_year >= i64::from(start.year()) + g.scenario.duration_years {
+        return None;
+    }
+    let status = |status: &'static str| {
+        g.investment
+            .values()
+            .filter(move |i| i.tax_status == status)
+            .map(|i| i.account_id)
+    };
+    // A Roth to convert into.
+    status("TaxFree").next()?;
+    if g.effects.values().any(|e| e.kind == "RothConversion") {
+        return None;
+    }
+    // Opening value at cost: the plan's prices are not known before a run,
+    // and any money at all is reason enough.
+    let held = |id: i64| {
+        g.investment.get(&id).map_or(0.0, |i| i.cash_value)
+            + g.positions
+                .get(&id)
+                .into_iter()
+                .flatten()
+                .map(|p| p.cost_basis)
+                .sum::<f64>()
+    };
+    let (account, _) = status("TaxDeferred")
+        .map(|id| (id, held(id)))
+        .filter(|(_, held)| *held > 0.0)
+        .max_by(|a, b| a.1.total_cmp(&b.1))?;
+    let name = g.accounts.iter().find(|a| a.id == account)?.name.clone();
+    Some((name, first_rmd_year))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn default_plan() -> ScenarioGraph {
+        serde_json::from_str(include_str!("../testdata/default_snapshot.json")).unwrap()
+    }
+
+    fn candidate(g: &ScenarioGraph) -> Option<String> {
+        preflight(g)
+            .issues
+            .into_iter()
+            .find(|i| i.code == "roth_conversion_candidate")
+            .map(|i| {
+                assert_eq!(i.severity, "info");
+                i.message
+            })
+    }
+
+    #[test]
+    fn a_pre_tax_balance_with_rmds_inside_the_plan_suggests_conversions() {
+        // Born 1996, the plan runs to 2096: RMDs begin in 2069.
+        let g = default_plan();
+        let message = candidate(&g).expect("a note");
+        assert!(message.contains("Fidelity 401(k)") && message.contains("2069"));
+        assert!(preflight(&g).can_run);
+    }
+
+    #[test]
+    fn no_note_without_rmds_in_the_plan_a_roth_or_pre_tax_money_or_with_a_conversion() {
+        let mut short = default_plan();
+        short.scenario.duration_years = 40;
+        assert!(candidate(&short).is_none());
+
+        let mut no_roth = default_plan();
+        no_roth.investment.retain(|_, i| i.tax_status != "TaxFree");
+        assert!(candidate(&no_roth).is_none());
+
+        let mut empty = default_plan();
+        empty.positions.remove(&3);
+        empty.investment.get_mut(&3).unwrap().cash_value = 0.0;
+        assert!(candidate(&empty).is_none());
+
+        let mut converting = default_plan();
+        let effect = converting.effects.values_mut().next().unwrap();
+        effect.kind = "RothConversion".into();
+        assert!(candidate(&converting).is_none());
+    }
 }

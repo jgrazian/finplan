@@ -210,6 +210,7 @@ export type { ReviewAi } from "./ReviewAi";
 export type { ReviewAiStatus } from "./ReviewAiStatus";
 export type { ReviewCheck } from "./ReviewCheck";
 export type { ReviewRequest } from "./ReviewRequest";
+export type { RothConversionsParams } from "./RothConversionsParams";
 export type { RowRef } from "./RowRef";
 export type { Run } from "./Run";
 export type { RunComparison } from "./RunComparison";

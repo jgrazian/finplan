@@ -677,3 +677,32 @@ fn comparison_rows_carry_the_after_tax_median() {
         assert_eq!(row.success_rate, before.success_rate);
     }
 }
+
+#[test]
+fn a_conversion_is_not_a_withdrawal() {
+    // Nothing sells investments in the dry plan, so any 401(k) withdrawal
+    // would be the conversion miscounted. The tax is paid from the bank.
+    let mut graph = dry_graph();
+    make(
+        &mut graph,
+        json!({"op": "create_event", "body": {
+            "name": "Roth conversions",
+            "trigger": {"kind": "Repeating", "interval": "Yearly",
+                        "start_condition": {"kind": "Date", "on_date": "2027-12-30"}},
+            "effects": [{"kind": "RothConversion", "from_account_id": 3, "to_account_id": 2,
+                         "amount": {"kind": "Fixed", "value": 20000.0},
+                         "pay_tax_from_account_id": 6}]}}),
+    );
+    let converting = project(&graph, SEED, &DrawdownRequest::default()).unwrap();
+    let plain = project(&dry_graph(), SEED, &DrawdownRequest::default()).unwrap();
+    assert_balanced(&converting);
+
+    let at = |id: i64| converting.accounts.iter().position(|a| a.id == id).unwrap();
+    let (k401, roth) = (at(3), at(2));
+    let years = &converting.choices[0].years;
+    assert!(years.iter().all(|y| y.withdrawals[k401] == 0.0));
+    let before = plain.choices[0].years.last().unwrap();
+    let after = years.last().unwrap();
+    assert!(after.balances[k401] < before.balances[k401]);
+    assert!(after.balances[roth] > before.balances[roth]);
+}

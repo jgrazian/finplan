@@ -546,6 +546,15 @@ export function describeEffect(effect: EffectSpec, names: EventNames): EventEffe
       };
     case "MarketShock":
       return { kind, detail: `markets fall ${Number((effect.drop * 100).toFixed(2))}%` };
+    case "RothConversion":
+      return {
+        kind,
+        detail: `${names.account(effect.from_account_id)} → ${names.account(effect.to_account_id)} · ${amount(effect.amount)} · tax ${
+          effect.pay_tax_from_account_id != null
+            ? `from ${names.account(effect.pay_tax_from_account_id)}`
+            : "withheld"
+        }`,
+      };
   }
 }
 

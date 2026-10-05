@@ -260,6 +260,19 @@ impl Expression {
                             number(0)?,
                         )
                         .map_err(|e| e.to_string())?,
+                    Op::BracketRoom => {
+                        let rate = number(0)?;
+                        let ceiling = crate::evaluate::bracket_ceiling(
+                            &state.taxes.config.federal_brackets,
+                            rate,
+                        );
+                        if !ceiling.is_finite() {
+                            return Err(format!(
+                                "bracket_room({rate}): no bracket is taxed above this rate"
+                            ));
+                        }
+                        (ceiling - state.taxes.ytd_tax.ordinary_income).max(0.0)
+                    }
                     Op::Clamp => {
                         let lower = number(1)?;
                         let upper = number(2)?;

@@ -1,9 +1,10 @@
 use crate::config::SimulationConfig;
 use crate::error::{LookupError, Result, SimulationError};
 use crate::model::{
-    Account, AccountFlavor, AccountId, AssetCoord, AssetId, AssetInfo, Event, EventEffect, EventId,
-    EventTrigger, LedgerEntry, Market, ParameterId, ParameterValue, ReturnProfileId, RmdTable,
-    SimulationWarning, StateEvent, TaxBracket, TaxConfig, TaxSummary, WealthSnapshot,
+    Account, AccountFlavor, AccountId, AssetCoord, AssetId, AssetInfo, ConversionTranche, Event,
+    EventEffect, EventId, EventTrigger, LedgerEntry, Market, ParameterId, ParameterValue,
+    ReturnProfileId, RmdTable, SimulationWarning, StateEvent, TaxBracket, TaxConfig, TaxSummary,
+    WealthSnapshot,
 };
 use rand::SeedableRng;
 use rustc_hash::FxHashMap;
@@ -98,6 +99,12 @@ pub struct SimPortfolio {
     pub year_end_balances: FxHashMap<i16, FxHashMap<AccountId, f64>>,
     /// Active RMD accounts (`account_id` -> `starting_age`)
     pub active_rmd_accounts: FxHashMap<AccountId, u8>,
+    /// The last year each account's RMD was taken (`ApplyRmd` ran for it)
+    pub rmd_taken: FxHashMap<AccountId, i16>,
+    // === Roth Conversions ===
+    /// Each Roth's conversions, oldest first, less what withdrawals before
+    /// 59½ have consumed (the five-year rule)
+    pub conversion_tranches: FxHashMap<AccountId, Vec<ConversionTranche>>,
     // === Contribution Tracking ===
     /// YTD contributions per account (for yearly limits)
     pub contributions_ytd: FxHashMap<AccountId, f64>,
@@ -536,6 +543,8 @@ impl SimulationState {
                 market,
                 year_end_balances: FxHashMap::default(),
                 active_rmd_accounts: FxHashMap::default(),
+                rmd_taken: FxHashMap::default(),
+                conversion_tranches: FxHashMap::default(),
                 contributions_ytd: FxHashMap::default(),
                 contributions_mtd: FxHashMap::default(),
                 wealth_snapshots: Vec::new(),
@@ -823,6 +832,29 @@ impl SimulationState {
             .copied()
     }
 
+    /// Whether `account` owes an RMD this year that has not been taken: the
+    /// owner is of RMD age today, the account held money at the end of last
+    /// year, and no `ApplyRmd` has run for it this year.
+    #[must_use]
+    pub fn owes_untaken_rmd(&self, account_id: AccountId) -> bool {
+        self.current_rmd_divisor(&RmdTable::irs_uniform_lifetime_2024())
+            .is_some()
+            && self
+                .prior_year_end_balance(account_id)
+                .is_some_and(|balance| balance > 0.0)
+            && self.portfolio.rmd_taken.get(&account_id) != Some(&self.timeline.current_date.year())
+    }
+
+    /// A Roth's conversions not yet consumed, oldest first; empty for any
+    /// other account.
+    #[must_use]
+    pub fn conversion_tranches(&self, account_id: AccountId) -> &[ConversionTranche] {
+        self.portfolio
+            .conversion_tranches
+            .get(&account_id)
+            .map_or(&[], Vec::as_slice)
+    }
+
     /// Get IRS divisor for current age
     pub fn current_rmd_divisor(&self, rmd_table: &RmdTable) -> Option<f64> {
         let (years, _months) = self.current_age();
@@ -948,7 +980,8 @@ fn bind_effect_parameters(
         | EventEffect::AssetSale { amount, .. }
         | EventEffect::Sweep { amount, .. }
         | EventEffect::AdjustBalance { amount, .. }
-        | EventEffect::CashTransfer { amount, .. } => {
+        | EventEffect::CashTransfer { amount, .. }
+        | EventEffect::RothConversion { amount, .. } => {
             *amount = amount
                 .bind_parameters(parameters, birth_date)
                 .map_err(|error| SimulationError::Config(error.to_string()))?;

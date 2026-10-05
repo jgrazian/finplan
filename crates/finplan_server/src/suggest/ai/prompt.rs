@@ -23,7 +23,7 @@ use finplan_plan::specs::{
     LotMethod, OffsetUnit, TriggerSpec, WithdrawalSourcesSpec, WithdrawalStrategy,
 };
 use finplan_plan::suggest::{Change, ChangeOp, ChangeTarget};
-use finplan_plan::templates::{NewRef, ReinvestCashParams, RowRef};
+use finplan_plan::templates::{NewRef, ReinvestCashParams, RothConversionsParams, RowRef, When};
 
 pub const PREVIEW_TOOL: &str = super::tools::PREVIEW;
 pub const SUBMIT_TOOL: &str = "submit_suggestion";
@@ -123,6 +123,8 @@ fn declarations() -> String {
         Section::decl(&cfg),
         // expand_template's params, for the templates a review expands.
         ReinvestCashParams::decl(&cfg),
+        RothConversionsParams::decl(&cfg),
+        When::decl(&cfg),
         RowRef::decl(&cfg),
         NewRef::decl(&cfg),
     ]

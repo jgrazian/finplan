@@ -35,7 +35,8 @@ impl EffectData {
             | Self::AssetSale { amount, .. }
             | Self::Sweep { amount, .. }
             | Self::AdjustBalance { amount, .. }
-            | Self::CashTransfer { amount, .. } => Some(amount),
+            | Self::CashTransfer { amount, .. }
+            | Self::RothConversion { amount, .. } => Some(amount),
             _ => None,
         }
     }
@@ -48,7 +49,8 @@ impl EffectData {
             | Self::AssetSale { amount, .. }
             | Self::Sweep { amount, .. }
             | Self::AdjustBalance { amount, .. }
-            | Self::CashTransfer { amount, .. } => Some(amount),
+            | Self::CashTransfer { amount, .. }
+            | Self::RothConversion { amount, .. } => Some(amount),
             _ => None,
         }
     }

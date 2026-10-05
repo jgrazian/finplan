@@ -273,6 +273,59 @@ pub fn flatten(entry: &LedgerEntry, names: &Names<'_>) -> Option<LedgerRow> {
             names.account_db_id(*account_id),
         ),
 
+        // In kind: no money moves, so the figure is the lot's value with no
+        // sign, and nothing reads it as a sale.
+        StateEvent::AssetLotMoved {
+            from,
+            to,
+            units,
+            value,
+            ..
+        } => with_basis(
+            row(
+                ASSET,
+                "Move",
+                format!(
+                    "{units:.2} units from {} to {}",
+                    names.account(*from),
+                    names.account(*to)
+                ),
+                None,
+                names.account_db_id(*from),
+            ),
+            *value,
+            "worth",
+        ),
+
+        // The gross converted, all of it ordinary income; the moves, the
+        // tax and any penalty follow as their own entries.
+        StateEvent::RothConversion {
+            from,
+            to,
+            amount,
+            tax,
+            withheld,
+        } => with_basis(
+            row(
+                ASSET,
+                "Roth conversion",
+                if *withheld > 0.0 {
+                    format!(
+                        "{} to {}, {:.0} withheld for tax",
+                        names.account(*from),
+                        names.account(*to),
+                        withheld
+                    )
+                } else {
+                    format!("{} to {}", names.account(*from), names.account(*to))
+                },
+                Some(*amount),
+                names.account_db_id(*from),
+            ),
+            *tax,
+            "tax",
+        ),
+
         StateEvent::IncomeTax {
             gross_amount,
             federal_tax,

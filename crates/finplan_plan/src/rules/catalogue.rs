@@ -143,6 +143,14 @@ const CATALOGUE: &[PlanCheck] = &[
         "The tax, return and inflation assumptions to confirm.",
         "none",
     ),
+    check(
+        "roth_conversion_candidate",
+        Preflight,
+        Plan,
+        Read,
+        "Pre-tax money whose RMDs begin inside the plan, with a Roth account and no conversion yet.",
+        "none (points at Add Roth conversions on the Plan tab)",
+    ),
     // ── rules ──
     check(
         "cost_basis_equals_value",

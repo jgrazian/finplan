@@ -12,8 +12,8 @@ mod tax_config;
 
 pub use accounts::{
     Account, AccountFlavor, AccountSnapshot, AccountSnapshotFlavor, AssetLot, Cash, CatchUp,
-    ContributionLimit, ContributionLimitPeriod, FixedAsset, InvestmentContainer, LoanDetail,
-    PaymentSchedule, Repayment, TaxStatus, amortized_payment,
+    ContributionLimit, ContributionLimitPeriod, ConversionTranche, FixedAsset, InvestmentContainer,
+    LoanDetail, PaymentSchedule, Repayment, TaxStatus, amortized_payment,
 };
 pub use diagnostics::{FundingAccumulator, FundingDiagnostics, PathDiagnostics, ShortfallStart};
 pub use events::{

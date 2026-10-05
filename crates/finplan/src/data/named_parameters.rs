@@ -113,7 +113,8 @@ fn visit_effect_names(effect: &mut EffectData, visitor: &mut impl FnMut(&mut Str
         | EffectData::AssetSale { amount, .. }
         | EffectData::Sweep { amount, .. }
         | EffectData::AdjustBalance { amount, .. }
-        | EffectData::CashTransfer { amount, .. } => visit_amount_names(amount, visitor),
+        | EffectData::CashTransfer { amount, .. }
+        | EffectData::RothConversion { amount, .. } => visit_amount_names(amount, visitor),
         _ => {}
     }
 }

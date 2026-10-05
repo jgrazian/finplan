@@ -10,4 +10,5 @@ export type TemplateKind =
   | "market_crash"
   | "large_expense"
   | "job_loss"
-  | "reinvest_cash";
+  | "reinvest_cash"
+  | "roth_conversions";

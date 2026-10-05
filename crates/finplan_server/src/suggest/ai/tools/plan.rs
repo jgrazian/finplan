@@ -335,7 +335,8 @@ pub(super) fn validate(input: &Value, env: &ToolEnv<'_>) -> ToolOutput {
 /// The templates a review may expand: those whose changes are the fix a
 /// review note offers. The drafting agent serves its own `expand_template`
 /// over every template.
-pub const REVIEW_TEMPLATES: &[TemplateKind] = &[TemplateKind::ReinvestCash];
+pub const REVIEW_TEMPLATES: &[TemplateKind] =
+    &[TemplateKind::ReinvestCash, TemplateKind::RothConversions];
 
 fn kind_name(kind: TemplateKind) -> String {
     serde_json::to_value(kind)

@@ -346,6 +346,116 @@ fn remove_database_files(path: &Path) {
 mod tests {
     use super::*;
 
+    /// Migration 0025 rebuilds `effects` inside sqlx's transaction, with
+    /// foreign keys on: every effect, withdrawal source and Random branch on
+    /// an existing plan must survive it.
+    #[tokio::test]
+    async fn the_roth_conversion_migration_keeps_every_effect_and_its_children() {
+        let options = SqliteConnectOptions::from_str("sqlite::memory:")
+            .unwrap()
+            .foreign_keys(true);
+        let mut conn = SqliteConnection::connect_with(&options).await.unwrap();
+        let before = sqlx::migrate::Migrator {
+            migrations: std::borrow::Cow::Owned(
+                MIGRATOR
+                    .iter()
+                    .filter(|m| m.version < 25)
+                    .cloned()
+                    .collect(),
+            ),
+            ignore_missing: false,
+            locking: true,
+            no_tx: false,
+        };
+        before.run(&mut conn).await.unwrap();
+        for statement in [
+            "INSERT INTO users(id,email,password_hash) VALUES('u','u@example.com','hash')",
+            "INSERT INTO scenarios(id,user_id,name,start_date) VALUES(1,'u','Plan','2026-01-01')",
+            "INSERT INTO accounts(id,scenario_id,name,flavor) VALUES(1,1,'IRA','Investment'),
+                 (2,1,'Checking','Bank')",
+            "INSERT INTO events(id,scenario_id,name) VALUES(1,1,'Draw'),(2,1,'Maybe')",
+            "INSERT INTO transfer_amounts(id,scenario_id,kind,value) VALUES(1,1,'Fixed',100),
+                 (2,1,'Fixed',5)",
+            "INSERT INTO effects(id,scenario_id,event_id,position,kind,to_account_id,amount_id,
+                 income_type) VALUES(1,1,1,0,'Sweep',2,1,'Taxable')",
+            "INSERT INTO effect_withdrawal_sources(effect_id,mode,account_id)
+                 VALUES(1,'SingleAccount',1)",
+            "INSERT INTO effect_withdrawal_source_items(effect_id,role,position,account_id)
+                 VALUES(1,'exclude',0,2)",
+            "INSERT INTO effects(id,scenario_id,event_id,position,kind,probability)
+                 VALUES(2,1,2,0,'Random',0.5)",
+            "INSERT INTO effects(id,scenario_id,parent_id,parent_slot,kind,from_account_id,
+                 amount_id) VALUES(3,1,2,'on_true','Expense',2,2)",
+        ] {
+            sqlx::query(statement).execute(&mut conn).await.unwrap();
+        }
+
+        MIGRATOR.run(&mut conn).await.unwrap();
+
+        let count = |sql: &'static str| sqlx::query_scalar::<_, i64>(sql);
+        assert_eq!(
+            count("SELECT COUNT(*) FROM effects")
+                .fetch_one(&mut conn)
+                .await
+                .unwrap(),
+            3
+        );
+        assert_eq!(
+            count("SELECT COUNT(*) FROM effect_withdrawal_sources")
+                .fetch_one(&mut conn)
+                .await
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            count("SELECT COUNT(*) FROM effect_withdrawal_source_items")
+                .fetch_one(&mut conn)
+                .await
+                .unwrap(),
+            1
+        );
+        let violations: Vec<(String,)> =
+            sqlx::query_as("SELECT \"table\" FROM pragma_foreign_key_check")
+                .fetch_all(&mut conn)
+                .await
+                .unwrap();
+        assert!(violations.is_empty(), "{violations:?}");
+        // The self-reference was renamed with the table: deleting the Random
+        // effect still takes its branch with it.
+        let parent_table: String = sqlx::query_scalar(
+            "SELECT \"table\" FROM pragma_foreign_key_list('effects') WHERE \"from\" = 'parent_id'",
+        )
+        .fetch_one(&mut conn)
+        .await
+        .unwrap();
+        assert_eq!(parent_table, "effects");
+        sqlx::query("DELETE FROM effects WHERE id = 2")
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        assert_eq!(
+            count("SELECT COUNT(*) FROM effects")
+                .fetch_one(&mut conn)
+                .await
+                .unwrap(),
+            1
+        );
+        // And the new kind and column are accepted.
+        sqlx::query(
+            "INSERT INTO accounts(id,scenario_id,name,flavor) VALUES(3,1,'Roth','Investment')",
+        )
+        .execute(&mut conn)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO effects(scenario_id,event_id,position,kind,from_account_id,to_account_id,
+                 amount_id,pay_tax_from_account_id) VALUES(1,2,1,'RothConversion',1,3,2,2)",
+        )
+        .execute(&mut conn)
+        .await
+        .unwrap();
+    }
+
     #[tokio::test]
     async fn rebuild_preserves_data_resets_history_and_prunes_old_details() {
         let directory = tempfile::tempdir().unwrap();

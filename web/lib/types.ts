@@ -325,7 +325,8 @@ export type EffectKind =
   | "Random"
   | "BuyProperty"
   | "SellProperty"
-  | "MarketShock";
+  | "MarketShock"
+  | "RothConversion";
 
 export interface EventEffect {
   kind: EffectKind;

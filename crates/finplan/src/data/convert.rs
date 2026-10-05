@@ -735,6 +735,21 @@ fn convert_effect_inner(
             })
         }
 
+        EffectData::RothConversion {
+            from,
+            to,
+            amount,
+            pay_tax_from,
+        } => Ok(EventEffect::RothConversion {
+            from: resolve_account(from, ctx)?,
+            to: resolve_account(to, ctx)?,
+            amount: convert_amount(amount, ctx)?,
+            pay_tax_from: pay_tax_from
+                .as_ref()
+                .map(|tag| resolve_account(tag, ctx))
+                .transpose()?,
+        }),
+
         EffectData::Random {
             probability,
             on_true,

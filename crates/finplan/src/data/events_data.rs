@@ -588,6 +588,17 @@ pub enum EffectData {
         amount: AmountData,
     },
 
+    /// Convert pre-tax money to a Roth: cash first, then lots in kind; the
+    /// gross is ordinary income. The tax is paid from `pay_tax_from`, or
+    /// withheld from the conversion when it is None.
+    RothConversion {
+        from: AccountTag,
+        to: AccountTag,
+        amount: AmountData,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pay_tax_from: Option<AccountTag>,
+    },
+
     /// Randomly execute effects based on probability
     /// Triggers on_true event if random roll < probability, otherwise on_false
     Random {

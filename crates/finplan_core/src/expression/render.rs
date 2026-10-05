@@ -115,6 +115,7 @@ impl Expression {
                 Op::Percent => format!("({})%", pop()?),
                 Op::Abs => format!("abs({})", pop()?),
                 Op::Inflate => format!("inflation({})", pop()?),
+                Op::BracketRoom => format!("bracket_room({})", pop()?),
                 Op::Clamp => {
                     let upper = pop()?;
                     let lower = pop()?;

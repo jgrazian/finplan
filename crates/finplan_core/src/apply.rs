@@ -9,8 +9,8 @@ use crate::{
         EvalEvent, TriggerEvent, evaluate_effect_into, evaluate_trigger, point_in_time_target,
     },
     model::{
-        AccountFlavor, AccountId, AssetLot, CashFlowKind, EventId, EventTrigger, LedgerEntry,
-        LoanDetail, Repayment, SimulationWarning, StateEvent, WarningKind,
+        AccountFlavor, AccountId, AssetLot, CashFlowKind, ConversionTranche, EventId, EventTrigger,
+        LedgerEntry, LoanDetail, Repayment, SimulationWarning, StateEvent, WarningKind,
     },
     simulation_state::SimulationState,
 };
@@ -79,6 +79,13 @@ pub fn apply_eval_event_with_source(
 
     match event {
         EvalEvent::StateEvent(event) => {
+            // An RMD taken this year lets the year's conversions go ahead.
+            if let StateEvent::RmdWithdrawal { account_id, .. } = event {
+                state
+                    .portfolio
+                    .rmd_taken
+                    .insert(*account_id, current_date.year());
+            }
             // Directly apply a StateEvent (used for replaying ledger)
             record_ledger_entry(state, current_date, source_event, event.clone());
             Ok(())
@@ -387,6 +394,128 @@ pub fn apply_eval_event_with_source(
             };
             record_ledger_entry(state, current_date, source_event, ledger_event);
 
+            Ok(())
+        }
+
+        EvalEvent::MoveAssetLot {
+            from,
+            to,
+            lot_date,
+            units,
+            cost_basis,
+            value,
+        } => {
+            let Some(AccountFlavor::Investment(source)) = state
+                .portfolio
+                .accounts
+                .get_mut(&from.account_id)
+                .map(|a| &mut a.flavor)
+            else {
+                return Err(ApplyError::AccountType(
+                    AccountTypeError::NotAnInvestmentAccount(from.account_id),
+                ));
+            };
+            if let Some(lot) = source
+                .positions
+                .iter_mut()
+                .find(|l| l.asset_id == from.asset_id && l.purchase_date == *lot_date)
+            {
+                lot.units -= units;
+                lot.cost_basis -= cost_basis;
+                if lot.units <= 0.001 {
+                    source
+                        .positions
+                        .retain(|l| !(l.asset_id == from.asset_id && l.purchase_date == *lot_date));
+                }
+            }
+
+            let Some(AccountFlavor::Investment(target)) =
+                state.portfolio.accounts.get_mut(to).map(|a| &mut a.flavor)
+            else {
+                return Err(ApplyError::AccountType(
+                    AccountTypeError::NotAnInvestmentAccount(*to),
+                ));
+            };
+            target.positions.push(AssetLot {
+                asset_id: from.asset_id,
+                purchase_date: *lot_date,
+                units: *units,
+                cost_basis: *cost_basis,
+            });
+            state.portfolio.needs_lot_consolidation = true;
+
+            let ledger_event = StateEvent::AssetLotMoved {
+                from: from.account_id,
+                to: *to,
+                asset_id: from.asset_id,
+                lot_date: *lot_date,
+                units: *units,
+                cost_basis: *cost_basis,
+                value: *value,
+            };
+            record_ledger_entry(state, current_date, source_event, ledger_event);
+            Ok(())
+        }
+
+        EvalEvent::RothConversion {
+            from,
+            to,
+            amount,
+            tax,
+            withheld,
+        } => {
+            let converted = amount - withheld;
+            if converted > 0.0 {
+                state
+                    .portfolio
+                    .conversion_tranches
+                    .entry(*to)
+                    .or_default()
+                    .push(ConversionTranche {
+                        year: current_date.year(),
+                        amount: converted,
+                    });
+            }
+            let ledger_event = StateEvent::RothConversion {
+                from: *from,
+                to: *to,
+                amount: *amount,
+                tax: *tax,
+                withheld: *withheld,
+            };
+            record_ledger_entry(state, current_date, source_event, ledger_event);
+            Ok(())
+        }
+
+        // Bookkeeping for the five-year rule; the penalty it led to has its
+        // own ledger entry.
+        EvalEvent::ConsumeConversions { account, amount } => {
+            let mut left = *amount;
+            if let Some(tranches) = state.portfolio.conversion_tranches.get_mut(account) {
+                for tranche in tranches.iter_mut() {
+                    let take = left.min(tranche.amount);
+                    tranche.amount -= take;
+                    left -= take;
+                    if left <= 0.0 {
+                        break;
+                    }
+                }
+                tranches.retain(|t| t.amount > 0.005);
+            }
+            Ok(())
+        }
+
+        EvalEvent::EffectSkipped {
+            account_id,
+            message,
+        } => {
+            state.warnings.push(SimulationWarning {
+                date: current_date,
+                event_id: source_event,
+                message: (*message).to_string(),
+                kind: WarningKind::EffectSkipped,
+                account_id: *account_id,
+            });
             Ok(())
         }
 

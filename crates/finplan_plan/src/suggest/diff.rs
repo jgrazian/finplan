@@ -568,6 +568,7 @@ fn key_label(key: &str) -> String {
         "property_account_id" => "property",
         "payoff_account_id" => "pays off",
         "loan_account_id" => "loan",
+        "pay_tax_from_account_id" => "pays tax from",
         "start_condition" => "starts",
         "end_condition" => "ends",
         "on_true" => "if true",
@@ -609,6 +610,7 @@ fn format_of(key: &str) -> Format {
         | "property_account_id"
         | "payoff_account_id"
         | "loan_account_id"
+        | "pay_tax_from_account_id"
         | "exclude_accounts" => Format::Account,
         "asset_id" => Format::Asset,
         "event_id" | "target_event_id" => Format::Event,
@@ -894,6 +896,17 @@ fn render_effect(value: &Value, names: &Names) -> String {
         "MarketShock" => format!(
             "Market shock −{}",
             percent(field(value, "drop").as_f64().unwrap_or_default())
+        ),
+        "RothConversion" => format!(
+            "Convert {} {} → {}, tax {}",
+            amount("amount"),
+            account("from_account_id"),
+            account("to_account_id"),
+            if field(value, "pay_tax_from_account_id").is_null() {
+                "withheld".to_string()
+            } else {
+                format!("from {}", account("pay_tax_from_account_id"))
+            }
         ),
         _ => value.to_string(),
     }

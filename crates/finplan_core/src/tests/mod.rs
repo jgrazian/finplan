@@ -28,6 +28,7 @@ mod parameters;
 mod profiling;
 mod real_estate;
 mod returns;
+mod roth_conversion;
 mod rsu;
 mod simulation_result;
 mod snapshots;

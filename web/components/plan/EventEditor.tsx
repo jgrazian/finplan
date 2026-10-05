@@ -21,7 +21,9 @@ import { EffectCards } from "./EffectSentence";
 import { renameAmountReferences, renameParameterReferences } from "./amountDraft";
 import { Note, type TriggerContext, TriggerFamily } from "./TriggerFields";
 import { TriggerSentence } from "./TriggerSentence";
-import { firesOnceMatters, isManual, triggerConversion } from "./triggerDraft";
+import { firesOnceMatters, isManual, toTriggerSpec, triggerConversion } from "./triggerDraft";
+import { toEffectSpec } from "./effectDraft";
+import { bracketRoomTimingHint } from "@/lib/view/conversion";
 import {
   type EventDraft,
   changedFields,
@@ -312,6 +314,14 @@ export function EventEditor({
             disabled={offline}
             onChange={(effects) => set("effects", effects)}
           />
+          {(() => {
+            const hint = bracketRoomTimingHint(
+              toTriggerSpec(draft.trigger),
+              draft.effects.map(toEffectSpec),
+              context.birthDate,
+            );
+            return hint && <div style={{ marginTop: 10 }}><Note>{hint}</Note></div>;
+          })()}
         </Section>
       </div>
 

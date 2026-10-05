@@ -277,7 +277,7 @@ pub async fn load_connection(
                 to_account_id, asset_id, amount_id, target_event_id, amount_mode,
                 income_type, lot_method, probability, units, sell_to_cover,
                 loan_account_id, down_payment_amount_id, term_months, selling_cost_rate,
-                gain_exclusion, shock_drop
+                gain_exclusion, shock_drop, pay_tax_from_account_id
            FROM effects WHERE scenario_id = ?1 ORDER BY event_id, position, id",
     )
     .bind(scenario_id)

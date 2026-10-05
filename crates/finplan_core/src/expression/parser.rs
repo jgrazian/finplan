@@ -447,7 +447,7 @@ impl Parser<'_> {
                 self.expression(0, depth)?;
                 Op::If
             }
-            "min" | "max" | "clamp" | "abs" | "inflation" | "top_up" => {
+            "min" | "max" | "clamp" | "abs" | "inflation" | "top_up" | "bracket_room" => {
                 self.expression(0, depth)?;
                 if matches!(name, "min" | "max" | "clamp") {
                     self.expect(',')?;
@@ -463,6 +463,7 @@ impl Parser<'_> {
                     "clamp" => Op::Clamp,
                     "abs" => Op::Abs,
                     "inflation" => Op::Inflate,
+                    "bracket_room" => Op::BracketRoom,
                     "top_up" => {
                         self.emit(Op::EndpointBalance(AccountRef::Target), span.clone())?;
                         self.emit(Op::Sub, span.clone())?;

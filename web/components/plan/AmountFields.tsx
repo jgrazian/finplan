@@ -19,6 +19,7 @@ const FUNCTION_INFO: ReadonlyArray<{ insert: string; detail: string; group: stri
   { insert: "clamp(", detail: "value, lower, upper", group: "money" },
   { insert: "abs(", detail: "absolute value", group: "money" },
   { insert: "if(", detail: "condition, then, else", group: "money" },
+  { insert: "bracket_room(", detail: "income left this year below a tax rate", group: "money" },
   { insert: "balance(", detail: "an account's total value", group: "balances" },
   { insert: "cash(", detail: "an account's cash only", group: "balances" },
   { insert: "holding(", detail: "account, asset", group: "balances" },
@@ -47,6 +48,7 @@ function contextHint(effect: EffectSpec): string {
     case "AssetSale": return "source is the selling account; target is its cash. source_balance() selects the holding when one is named.";
     case "Sweep": return "target is the destination cash account. source is available only for a single account or holding.";
     case "AdjustBalance": return "target is the adjusted account; source is unavailable.";
+    case "RothConversion": return "source is the pre-tax account; target is the Roth's cash. bracket_room(0.22) converts up to the top of the 22% bracket.";
     default: return "Balance references depend on this effect's accounts.";
   }
 }

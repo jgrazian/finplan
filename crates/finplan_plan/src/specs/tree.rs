@@ -717,6 +717,18 @@ pub enum EffectSpec {
     MarketShock {
         drop: f64,
     },
+    /// Convert pre-tax money to a Roth: `from_account_id` (tax-deferred)
+    /// into `to_account_id` (tax-free), cash first then holdings in kind.
+    /// The gross is ordinary income; the tax is paid from
+    /// `pay_tax_from_account_id` (a bank or taxable account), or withheld
+    /// from the conversion when it is None.
+    RothConversion {
+        from_account_id: i64,
+        to_account_id: i64,
+        amount: AmountSpec,
+        #[serde(default)]
+        pay_tax_from_account_id: Option<i64>,
+    },
 }
 
 /// How a `BuyProperty` is financed.
@@ -836,6 +848,7 @@ impl EffectSpec {
             selling_cost_rate: f.selling_cost_rate,
             gain_exclusion: f.gain_exclusion,
             shock_drop: f.shock_drop,
+            pay_tax_from_account_id: f.pay_tax_from_account_id,
         });
 
         match self {
@@ -880,6 +893,7 @@ impl EffectSpec {
             | EffectSpec::Sweep { amount, .. }
             | EffectSpec::AdjustBalance { amount, .. }
             | EffectSpec::CashTransfer { amount, .. }
+            | EffectSpec::RothConversion { amount, .. }
             | EffectSpec::BuyProperty { price: amount, .. } => Some(amount),
             _ => None,
         }
@@ -904,6 +918,7 @@ struct EffectFields {
     selling_cost_rate: Option<f64>,
     gain_exclusion: Option<f64>,
     shock_drop: Option<f64>,
+    pay_tax_from_account_id: Option<i64>,
 }
 
 impl EffectFields {
@@ -925,6 +940,7 @@ impl EffectFields {
             selling_cost_rate: None,
             gain_exclusion: None,
             shock_drop: None,
+            pay_tax_from_account_id: None,
         }
     }
 }
@@ -1098,6 +1114,17 @@ impl From<&EffectSpec> for EffectFields {
             EffectSpec::MarketShock { drop } => EffectFields {
                 shock_drop: Some(*drop),
                 ..EffectFields::blank("MarketShock")
+            },
+            EffectSpec::RothConversion {
+                from_account_id,
+                to_account_id,
+                pay_tax_from_account_id,
+                ..
+            } => EffectFields {
+                from_account_id: Some(*from_account_id),
+                to_account_id: Some(*to_account_id),
+                pay_tax_from_account_id: *pay_tax_from_account_id,
+                ..EffectFields::blank("RothConversion")
             },
         }
     }

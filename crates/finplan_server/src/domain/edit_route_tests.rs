@@ -1139,6 +1139,57 @@ fn new_account(value: Value) -> CreateAccount {
 }
 
 #[tokio::test]
+async fn roth_conversions_match_the_route_and_are_refused_alike() {
+    let plan = Plan::new().await;
+    let mut mem = plan.load().await;
+    let ids = &plan.ids;
+    let k401 = json!({"name": "401(k)", "flavor": "Investment", "tax_status": "TaxDeferred",
+                      "cash_value": 2000.0, "cash_return_profile_id": ids.cash});
+    let sql = plan
+        .create_account(&new_account(k401.clone()), &[])
+        .await
+        .unwrap();
+    let k401 = create_account(&mut mem, &new_account(k401)).unwrap();
+    assert_eq!(sql, k401);
+
+    let conversion = |name: &str, from: i64, to: i64, pay: Value| {
+        body(json!({
+            "name": name,
+            "trigger": {"kind": "Repeating", "interval": "Yearly",
+                        "start_condition": {"kind": "Date", "on_date": "2030-12-30"},
+                        "end_condition": {"kind": "AgeParameter", "parameter_id": ids.retire_age}},
+            "effects": [{"kind": "RothConversion", "from_account_id": from, "to_account_id": to,
+                         "amount": {"kind": "Expression", "source": "bracket_room(22%)"},
+                         "pay_tax_from_account_id": pay}],
+        }))
+    };
+    for body in [
+        conversion("Paid conversions", k401, ids.roth, json!(ids.usaa)),
+        conversion("Withheld conversions", k401, ids.roth, Value::Null),
+    ] {
+        let sql_id = plan.create(&body).await.unwrap();
+        let mem_id = create_event(&mut mem, &body).unwrap();
+        assert_eq!(sql_id, mem_id, "{}", body.name);
+        assert_same(&plan, &mem, &body.name).await;
+        let read = serde_json::to_value(read_event(&plan.load().await, sql_id).unwrap()).unwrap();
+        assert_eq!(read["effects"][0]["kind"], "RothConversion");
+    }
+
+    let before = serde_json::to_value(&mem).unwrap();
+    for body in [
+        conversion("From a brokerage", ids.vanguard, ids.roth, Value::Null),
+        conversion("Into a bank", k401, ids.usaa, Value::Null),
+        conversion("Paid by the Roth", k401, ids.roth, json!(ids.roth)),
+    ] {
+        let sql = plan.create(&body).await.unwrap_err();
+        let err = create_event(&mut mem, &body).unwrap_err();
+        assert_eq!(status(sql), status(err), "{}", body.name);
+        assert_eq!(serde_json::to_value(&mem).unwrap(), before, "{}", body.name);
+    }
+    assert_same(&plan, &mem, "after refusals").await;
+}
+
+#[tokio::test]
 async fn created_assets_and_accounts_match_the_route() {
     let plan = Plan::new().await;
     let mut mem = plan.load().await;

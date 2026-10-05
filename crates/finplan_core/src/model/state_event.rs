@@ -161,6 +161,34 @@ pub enum StateEvent {
     /// sell its holdings; the tax events that follow it are its own.
     CashWithdrawal { account_id: AccountId, amount: f64 },
 
+    /// Move a lot between investment accounts in kind, at the same units
+    /// (a Roth conversion). Not a sale: no proceeds, no gain, nothing leaves
+    /// the plan. `value` is its market value when moved.
+    AssetLotMoved {
+        from: AccountId,
+        to: AccountId,
+        asset_id: AssetId,
+        lot_date: Date,
+        units: f64,
+        cost_basis: f64,
+        value: f64,
+    },
+
+    /// Pre-tax money converted to a Roth. `amount` is the gross value that
+    /// left `from`, all of it ordinary income; `tax` the income tax on it
+    /// (federal and state; the `IncomeTax` that follows). `withheld` is the
+    /// part kept back to pay that tax and any penalty, as a distribution
+    /// rather than a conversion (zero when the tax is paid from another
+    /// account), so `to` received `amount - withheld`. The cash and lot moves
+    /// that carry it follow this entry.
+    RothConversion {
+        from: AccountId,
+        to: AccountId,
+        amount: f64,
+        tax: f64,
+        withheld: f64,
+    },
+
     // === Tax Events ===
     /// Ordinary income tax incurred
     IncomeTax {
@@ -262,7 +290,9 @@ impl StateEvent {
     pub fn is_asset_event(&self) -> bool {
         matches!(
             self,
-            StateEvent::AssetPurchase { .. } | StateEvent::AssetSale { .. }
+            StateEvent::AssetPurchase { .. }
+                | StateEvent::AssetSale { .. }
+                | StateEvent::AssetLotMoved { .. }
         )
     }
 
@@ -303,6 +333,8 @@ impl StateEvent {
             StateEvent::AssetPurchase { account_id, .. } => Some(*account_id),
             StateEvent::AssetSale { account_id, .. } => Some(*account_id),
             StateEvent::CashWithdrawal { account_id, .. } => Some(*account_id),
+            StateEvent::AssetLotMoved { from, .. } => Some(*from),
+            StateEvent::RothConversion { from, .. } => Some(*from),
             StateEvent::RmdWithdrawal { account_id, .. } => Some(*account_id),
             StateEvent::BalanceAdjusted { account, .. } => Some(*account),
             _ => None,

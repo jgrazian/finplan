@@ -10,8 +10,8 @@ use crate::{
     error::MarketError,
     evaluate::EvalEvent,
     model::{
-        AccountId, AmountMode, AssetCoord, AssetId, AssetLot, CashFlowKind, InvestmentContainer,
-        LotMethod, Market, TaxConfig, TaxStatus,
+        AccountId, AmountMode, AssetCoord, AssetId, AssetLot, CashFlowKind, ConversionTranche,
+        InvestmentContainer, LotMethod, Market, TaxConfig, TaxStatus,
     },
     taxes::{calculate_federal_marginal_tax, calculate_gross_from_net},
 };
@@ -60,6 +60,9 @@ pub struct LiquidationParams<'a> {
     pub ytd_ordinary_income: f64,
     /// Whether early withdrawal penalty applies (person below age 59.5)
     pub early_withdrawal_penalty_applies: bool,
+    /// The account's Roth conversions, oldest first (tax-free accounts only;
+    /// empty otherwise), for the five-year rule
+    pub conversion_tranches: &'a [ConversionTranche],
 }
 
 /// Liquidate assets from an investment container.
@@ -282,7 +285,21 @@ fn liquidate_tax_free_into(
     push_lot_subtractions(params.asset_coord, &lot_result, out);
 
     let gross_amount = lot_result.proceeds;
-    let net_amount = gross_amount; // No taxes
+    // No tax. Before 59½, the part drawn from a recent conversion is
+    // penalized (earnings are not: see `conversion_penalty_into`).
+    let early_withdrawal_penalty = if params.early_withdrawal_penalty_applies {
+        conversion_penalty_into(
+            params.asset_coord.account_id,
+            params.conversion_tranches,
+            params.current_date.year(),
+            gross_amount,
+            params.tax_config,
+            out,
+        )
+    } else {
+        0.0
+    };
+    let net_amount = gross_amount - early_withdrawal_penalty;
 
     out.push(EvalEvent::CashCredit {
         to: params.to_account,
@@ -293,8 +310,77 @@ fn liquidate_tax_free_into(
     LiquidationResult {
         gross_amount,
         net_proceeds: net_amount,
-        early_withdrawal_penalty: 0.0, // No penalty for tax-free accounts (simplified MVP)
+        early_withdrawal_penalty,
     }
+}
+
+/// The five-year rule on a withdrawal from a Roth before 59½.
+///
+/// The withdrawal consumes the account's basis oldest first: contributions
+/// (not modeled, so none), then conversions in the order they were made. The
+/// part drawn from a conversion fewer than five tax years old pays the
+/// early-withdrawal penalty. Earnings, which come out last and before 59½ are
+/// both taxed and penalized in law, are not: v1 enforces the conversion
+/// penalty only.
+///
+/// Conversions already consumed by this evaluation (a sweep visiting the
+/// account twice) are read back from `out`, since `state` moves only once
+/// the events apply. Pushes the consumption and the penalty; returns the
+/// penalty.
+pub(crate) fn conversion_penalty_into(
+    account_id: AccountId,
+    tranches: &[ConversionTranche],
+    current_year: i16,
+    amount: f64,
+    tax_config: &TaxConfig,
+    out: &mut Vec<EvalEvent>,
+) -> f64 {
+    let mut skip: f64 = out
+        .iter()
+        .filter_map(|ev| match ev {
+            EvalEvent::ConsumeConversions { account, amount } if *account == account_id => {
+                Some(*amount)
+            }
+            _ => None,
+        })
+        .sum();
+    let mut left = amount;
+    let mut consumed = 0.0;
+    let mut penalized = 0.0;
+    for tranche in tranches {
+        if left <= 0.0 {
+            break;
+        }
+        let skipped = skip.min(tranche.amount);
+        skip -= skipped;
+        let take = left.min(tranche.amount - skipped);
+        if take <= 0.0 {
+            continue;
+        }
+        left -= take;
+        consumed += take;
+        if current_year < tranche.year + 5 {
+            penalized += take;
+        }
+    }
+
+    if consumed > 0.0 {
+        out.push(EvalEvent::ConsumeConversions {
+            account: account_id,
+            amount: consumed,
+        });
+    }
+    if penalized <= 0.0 {
+        return 0.0;
+    }
+    let rate = tax_config.early_withdrawal_penalty_rate;
+    let penalty = penalized * rate;
+    out.push(EvalEvent::EarlyWithdrawalPenalty {
+        gross_amount: penalized,
+        penalty_amount: penalty,
+        penalty_rate: rate,
+    });
+    penalty
 }
 
 /// Parameters for withdrawing an investment account's uninvested cash
@@ -317,6 +403,11 @@ pub struct CashWithdrawalParams<'a> {
     pub ytd_ordinary_income: f64,
     /// Whether early withdrawal penalty applies (person below age 59.5)
     pub early_withdrawal_penalty_applies: bool,
+    /// The account's Roth conversions, oldest first (tax-free accounts only;
+    /// empty otherwise), for the five-year rule
+    pub conversion_tranches: &'a [ConversionTranche],
+    /// The tax year the withdrawal falls in
+    pub current_year: i16,
 }
 
 /// Withdraw up to `amount` of an investment account's own cash, taxed by the
@@ -380,7 +471,35 @@ pub fn withdraw_cash_into(
                 early_withdrawal_penalty,
             }
         }
-        // A qualified distribution: no tax, as for a tax-free sale.
+        // A qualified distribution: no tax, as for a tax-free sale, but
+        // before 59½ a recent conversion's share is penalized.
+        TaxStatus::TaxFree if params.early_withdrawal_penalty_applies => {
+            let gross_amount = amount.min(available);
+            out.push(EvalEvent::CashWithdrawal {
+                from: params.account_id,
+                amount: gross_amount,
+            });
+            let early_withdrawal_penalty = conversion_penalty_into(
+                params.account_id,
+                params.conversion_tranches,
+                params.current_year,
+                gross_amount,
+                params.tax_config,
+                out,
+            );
+            let net_amount = gross_amount - early_withdrawal_penalty;
+            out.push(EvalEvent::CashCredit {
+                to: params.to_account,
+                net_amount,
+                kind: CashFlowKind::LiquidationProceeds,
+            });
+
+            LiquidationResult {
+                gross_amount,
+                net_proceeds: net_amount,
+                early_withdrawal_penalty,
+            }
+        }
         TaxStatus::TaxFree => withdraw_untaxed_cash_into(amount.min(available), params, out),
     }
 }
@@ -909,6 +1028,7 @@ mod tests {
             tax_config: &tax_config,
             ytd_ordinary_income: 0.0,
             early_withdrawal_penalty_applies: true, // Below age 59.5
+            conversion_tranches: &[],
         };
 
         let (result, effects) = liquidate_investment(&params);
@@ -974,6 +1094,7 @@ mod tests {
             tax_config: &tax_config,
             ytd_ordinary_income: 0.0,
             early_withdrawal_penalty_applies: false, // Age 60, no penalty
+            conversion_tranches: &[],
         };
 
         let (result, effects) = liquidate_investment(&params);
@@ -1019,6 +1140,7 @@ mod tests {
             tax_config: &tax_config,
             ytd_ordinary_income: 0.0,
             early_withdrawal_penalty_applies: true, // Even with flag set, taxable should not have penalty
+            conversion_tranches: &[],
         };
 
         let (result, effects) = liquidate_investment(&params);

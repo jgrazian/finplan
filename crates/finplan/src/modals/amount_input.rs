@@ -405,6 +405,7 @@ mod tests {
             "Sweep",
             "Adjust Balance",
             "Cash Transfer",
+            "Roth Conversion",
         ] {
             let result = actions::handle_effect_type_for_add(&state, name);
             show(&mut state, result);
@@ -466,7 +467,7 @@ mod tests {
             );
         }
         let loaded = SimulationData::from_yaml(&state.data().to_yaml().unwrap()).unwrap();
-        assert_eq!(loaded.events[0].effects.len(), 7);
+        assert_eq!(loaded.events[0].effects.len(), 8);
         assert!(crate::data::convert::to_simulation_config(&loaded).is_ok());
         for effect in &loaded.events[0].effects {
             let field = FormField::amount("Amount", effect.amount().unwrap().clone());

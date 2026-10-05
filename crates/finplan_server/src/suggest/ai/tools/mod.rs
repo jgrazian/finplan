@@ -295,7 +295,7 @@ pub const SPECS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: EXPAND_TEMPLATE,
-        description: "Lower a template to the changes that write it in this plan, with the `$new` keys they create. reinvest_cash (ReinvestCashParams) adds a yearly December 30 event that invests the cash above a buffer of spending, from a bank into the largest taxable account's holdings or in place in an investment account. Place the changes in a step of a note; use a different key_prefix for each expansion in one path. Free.",
+        description: "Lower a template to the changes that write it in this plan, with the `$new` keys they create. reinvest_cash (ReinvestCashParams) adds a yearly December 30 event that invests the cash above a buffer of spending, from a bank into the largest taxable account's holdings or in place in an investment account. roth_conversions (RothConversionsParams) adds yearly December 30 conversions from a tax-deferred account into a Roth up to the top of a chosen bracket (bracket_room), from a start (date, age or parameter; default the retirement age) until the RMD age unless an end is given. Place the changes in a step of a note; use a different key_prefix for each expansion in one path. Free.",
         schema: plan::expand_template_schema,
         group: Group::Plan,
         metric: AiTool::ExpandTemplate,

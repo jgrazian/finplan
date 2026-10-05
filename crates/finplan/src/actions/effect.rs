@@ -34,6 +34,7 @@ pub fn handle_manage_effects(state: &AppState, selected: &str) -> ActionResult {
             "Adjust Balance".to_string(),
             "Cash Transfer".to_string(),
             "Apply RMD".to_string(),
+            "Roth Conversion".to_string(),
             "RSU Vesting".to_string(),
             "Random".to_string(),
         ];
@@ -410,6 +411,32 @@ fn build_edit_form_for_effect(
                 event_idx,
                 effect_idx,
                 EffectTypeContext::CashTransfer,
+            ))
+            .start_editing(),
+        )),
+
+        EffectData::RothConversion {
+            from,
+            to,
+            amount,
+            pay_tax_from,
+        } => ActionResult::modal(ModalState::Form(
+            FormModal::new(
+                "Edit Roth Conversion",
+                roth_conversion_fields(
+                    &investment_accounts,
+                    &accounts,
+                    &from.0,
+                    &to.0,
+                    amount.clone(),
+                    pay_tax_from.as_ref().map_or(WITHHOLD, |t| t.0.as_str()),
+                ),
+                ModalAction::EDIT_EFFECT,
+            )
+            .with_typed_context(ModalContext::effect_edit(
+                event_idx,
+                effect_idx,
+                EffectTypeContext::RothConversion,
             ))
             .start_editing(),
         )),
@@ -858,6 +885,32 @@ pub fn handle_effect_type_for_add(state: &AppState, effect_type: &str) -> Action
                 .start_editing(),
             ))
         }
+        "Roth Conversion" => {
+            if investment_accounts.is_empty() {
+                return ActionResult::error(
+                    "No investment accounts available. Create a 401(k) or IRA and a Roth first.",
+                );
+            }
+            ActionResult::modal(ModalState::Form(
+                FormModal::new(
+                    "New Roth Conversion",
+                    roth_conversion_fields(
+                        &investment_accounts,
+                        &accounts,
+                        &first_investment_account,
+                        &first_investment_account,
+                        AmountData::fixed(0.0),
+                        WITHHOLD,
+                    ),
+                    ModalAction::ADD_EFFECT,
+                )
+                .with_typed_context(ModalContext::effect_add(
+                    event_idx,
+                    EffectTypeContext::RothConversion,
+                ))
+                .start_editing(),
+            ))
+        }
         "RSU Vesting" => {
             if investment_accounts.is_empty() {
                 return ActionResult::error(
@@ -1059,6 +1112,7 @@ pub fn handle_add_effect(state: &mut AppState, ctx: ActionContext) -> ActionResu
                 amount,
             }
         }
+        EffectTypeContext::RothConversion => roth_conversion_from_form(form),
         EffectTypeContext::Random => {
             let prob_str = form.get_str(0).unwrap_or("50");
             let probability = prob_str
@@ -1270,6 +1324,7 @@ pub fn handle_edit_effect(state: &mut AppState, ctx: ActionContext) -> ActionRes
                 amount,
             })
         }
+        EffectTypeContext::RothConversion => Some(roth_conversion_from_form(form)),
         EffectTypeContext::Random => {
             let prob_str = form.get_str(0).unwrap_or("50");
             let probability = prob_str
@@ -1318,5 +1373,42 @@ pub fn handle_edit_effect(state: &mut AppState, ctx: ActionContext) -> ActionRes
         ActionResult::modified()
     } else {
         ActionResult::close()
+    }
+}
+
+/// The "pay tax from" choice that withholds the tax from the conversion.
+const WITHHOLD: &str = "Withhold from conversion";
+
+/// From (pre-tax) and To (Roth) among the investment accounts, the amount
+/// (typically `bracket_room(0.22)`, on a Dec 30 event: press `x` for an
+/// expression), and the account paying the tax.
+fn roth_conversion_fields(
+    investment_accounts: &[String],
+    accounts: &[String],
+    from: &str,
+    to: &str,
+    amount: AmountData,
+    pay_tax_from: &str,
+) -> Vec<FormField> {
+    let mut payers = vec![WITHHOLD.to_string()];
+    payers.extend(accounts.iter().cloned());
+    vec![
+        FormField::select("From (401k/IRA)", investment_accounts.to_vec(), from),
+        FormField::select("To (Roth)", investment_accounts.to_vec(), to),
+        FormField::amount("Amount (e.g. bracket_room(0.22))", amount),
+        FormField::select("Pay Tax From", payers, pay_tax_from),
+    ]
+}
+
+fn roth_conversion_from_form(form: &crate::modals::FormModal) -> EffectData {
+    let account = |index| AccountTag(form.get_str(index).unwrap_or("").to_string());
+    EffectData::RothConversion {
+        from: account(0),
+        to: account(1),
+        amount: form.get_amount(2).unwrap_or_else(|| AmountData::fixed(0.0)),
+        pay_tax_from: form
+            .get_str(3)
+            .filter(|payer| !payer.is_empty() && *payer != WITHHOLD)
+            .map(|payer| AccountTag(payer.to_string())),
     }
 }

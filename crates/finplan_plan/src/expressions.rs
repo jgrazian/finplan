@@ -192,6 +192,8 @@ fn effect_availability(effect: &EffectSpec) -> (bool, bool, bool, bool) {
             _ => (false, false, true, true),
         },
         EffectSpec::AdjustBalance { .. } => (false, false, true, true),
+        // The whole pre-tax account, like a single-account sweep.
+        EffectSpec::RothConversion { .. } => (true, false, true, true),
         _ => (false, false, false, false),
     }
 }
@@ -287,6 +289,13 @@ fn effect_context<'a>(
         EffectSpec::AdjustBalance { account_id, .. } => {
             context.with_endpoints(external, cash(ids.account(*account_id)?))
         }
+        EffectSpec::RothConversion {
+            from_account_id,
+            to_account_id,
+            ..
+        } => context
+            .with_endpoints(external, cash(ids.account(*to_account_id)?))
+            .with_source_account(ids.account(*from_account_id)?),
         _ => context,
     })
 }
@@ -300,6 +309,7 @@ fn effect_amount(effect: &EffectSpec) -> Option<&AmountSpec> {
         | EffectSpec::Sweep { amount, .. }
         | EffectSpec::AdjustBalance { amount, .. }
         | EffectSpec::CashTransfer { amount, .. }
+        | EffectSpec::RothConversion { amount, .. }
         | EffectSpec::BuyProperty { price: amount, .. } => Some(amount),
         _ => None,
     }
@@ -307,6 +317,21 @@ fn effect_amount(effect: &EffectSpec) -> Option<&AmountSpec> {
 
 pub fn validate_tree(graph: &ScenarioGraph, effects: &[EffectSpec]) -> PlanResult<()> {
     fn one(graph: &ScenarioGraph, effect: &EffectSpec) -> PlanResult<()> {
+        if let EffectSpec::RothConversion {
+            from_account_id,
+            to_account_id,
+            pay_tax_from_account_id,
+            ..
+        } = effect
+        {
+            compile::check_roth_conversion(
+                graph,
+                *from_account_id,
+                *to_account_id,
+                *pay_tax_from_account_id,
+            )
+            .map_err(|e| PlanError::invalid(e.to_string()))?;
+        }
         if let EffectSpec::Random {
             on_true, on_false, ..
         } = effect

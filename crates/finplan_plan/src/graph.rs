@@ -270,6 +270,9 @@ pub struct EffectRow {
     pub gain_exclusion: Option<f64>,
     #[serde(default)]
     pub shock_drop: Option<f64>,
+    /// RothConversion: the account paying the tax; NULL withholds it.
+    #[serde(default)]
+    pub pay_tax_from_account_id: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
