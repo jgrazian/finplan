@@ -5,12 +5,19 @@ export type UpdateTaxConfig = {
   name?: string | null;
   description?: string | null;
   state_rate?: number | null;
-  capital_gains_rate?: number | null;
   early_withdrawal_penalty_rate?: number | null;
   standard_deduction?: number | null;
   age_65_extra_deduction?: number | null;
   /**
+   * Absent leaves it; `null` removes the net investment income tax.
+   */
+  niit_threshold?: number | null;
+  /**
    * Replaces the whole bracket table when present.
    */
   federal_brackets?: Array<Bracket> | null;
+  /**
+   * Replaces the whole capital gains schedule when present.
+   */
+  capital_gains_brackets?: Array<Bracket> | null;
 };

@@ -1241,12 +1241,13 @@ async fn a_tax_configs_deductions_round_trip_and_reject_negatives() {
     let mut app = TestApp::new().await;
     app.login_as("deduction@example.com").await;
     let brackets = json!([{"threshold": 0.0, "rate": 0.1}]);
+    let gains = json!([{"threshold": 0.0, "rate": 0.15}]);
 
     // Left out, a config has no deduction: the engine taxes as before.
     let (status, plain) = app
         .post(
             "/api/tax-configs",
-            json!({"name": "Plain", "federal_brackets": brackets}),
+            json!({"name": "Plain", "federal_brackets": brackets, "capital_gains_brackets": gains}),
         )
         .await;
     assert_eq!(status, StatusCode::CREATED);
@@ -1273,7 +1274,8 @@ async fn a_tax_configs_deductions_round_trip_and_reject_negatives() {
     let (status, _) = app
         .post(
             "/api/tax-configs",
-            json!({"name": "Negative", "age_65_extra_deduction": -5.0, "federal_brackets": brackets}),
+            json!({"name": "Negative", "age_65_extra_deduction": -5.0,
+                   "federal_brackets": brackets, "capital_gains_brackets": gains}),
         )
         .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
@@ -1284,22 +1286,79 @@ async fn invalid_tax_brackets_are_rejected() {
     let mut app = TestApp::new().await;
     app.login_as("taxes@example.com").await;
 
+    let gains = json!([{"threshold": 0.0, "rate": 0.15}]);
+
     // Rates are fractions; 22 means 2200%.
     let (status, _) = app
         .post(
             "/api/tax-configs",
-            json!({"name": "Percent", "federal_brackets": [{"threshold": 0.0, "rate": 22.0}]}),
+            json!({"name": "Percent", "federal_brackets": [{"threshold": 0.0, "rate": 22.0}],
+                   "capital_gains_brackets": gains}),
         )
         .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
 
-    // The engine assumes a bracket starting at zero.
+    // The engine assumes a bracket starting at zero, in both schedules.
     let (status, _) = app
         .post(
             "/api/tax-configs",
-            json!({"name": "Gap", "federal_brackets": [{"threshold": 1000.0, "rate": 0.1}]}),
+            json!({"name": "Gap", "federal_brackets": [{"threshold": 1000.0, "rate": 0.1}],
+                   "capital_gains_brackets": gains}),
         )
         .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let (status, _) = app
+        .post(
+            "/api/tax-configs",
+            json!({"name": "Gains gap", "federal_brackets": [{"threshold": 0.0, "rate": 0.1}],
+                   "capital_gains_brackets": [{"threshold": 1000.0, "rate": 0.15}]}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    // A config needs a gains schedule.
+    let (status, _) = app
+        .post(
+            "/api/tax-configs",
+            json!({"name": "No gains", "federal_brackets": [{"threshold": 0.0, "rate": 0.1}]}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+#[tokio::test]
+async fn a_tax_configs_gains_schedule_and_niit_round_trip() {
+    let mut app = TestApp::new().await;
+    app.login_as("gains@example.com").await;
+
+    // The seeded config carries the 2024 single schedule.
+    let (_, taxes) = app.get("/api/tax-configs").await;
+    assert_eq!(
+        taxes[0]["capital_gains_brackets"],
+        json!([{"threshold": 0.0, "rate": 0.0}, {"threshold": 47025.0, "rate": 0.15},
+               {"threshold": 518900.0, "rate": 0.2}])
+    );
+    assert_eq!(taxes[0]["niit_threshold"], Value::Null);
+
+    let path = format!("/api/tax-configs/{}", taxes[0]["id"]);
+    let (status, updated) = app
+        .patch(
+            &path,
+            json!({"niit_threshold": 250000.0,
+                   "capital_gains_brackets": [{"threshold": 94050.0, "rate": 0.15},
+                                              {"threshold": 0.0, "rate": 0.0}]}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(updated["niit_threshold"], 250000.0);
+    assert_eq!(updated["capital_gains_brackets"][0]["threshold"], 0.0);
+
+    // Left out, it stays; null removes it.
+    let (_, kept) = app.patch(&path, json!({"state_rate": 0.04})).await;
+    assert_eq!(kept["niit_threshold"], 250000.0);
+    let (_, cleared) = app.patch(&path, json!({"niit_threshold": null})).await;
+    assert_eq!(cleared["niit_threshold"], Value::Null);
+    let (status, _) = app.patch(&path, json!({"niit_threshold": -1.0})).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
 }
 
@@ -5783,7 +5842,9 @@ fn draft_plan_changes(cash_profile: i64, inflation: i64) -> Value {
         {"op": "add", "target": {"new_tax_config": "tax"}, "path": "", "value": {
             "name": "Single, Colorado", "state_rate": 0.044,
             "federal_brackets": [{"threshold": 0.0, "rate": 0.10},
-                                 {"threshold": 11000.0, "rate": 0.12}]}},
+                                 {"threshold": 11000.0, "rate": 0.12}],
+            "capital_gains_brackets": [{"threshold": 0.0, "rate": 0.0},
+                                       {"threshold": 47025.0, "rate": 0.15}]}},
         {"op": "add", "target": {"new_return_profile": "broad"}, "path": "", "value": {
             "name": "US broad market", "asset_class": "UsEquity",
             "distribution": {"kind": "Bootstrap", "preset": "sp500"}}},

@@ -298,3 +298,89 @@ fn reorders_renumber_only_when_something_moves() {
         (0..ids.len() as i64).collect::<Vec<_>>()
     );
 }
+
+#[test]
+fn a_flat_capital_gains_rate_from_before_schedules_reads_as_one_bracket() {
+    // The shape archives, run snapshots and the browser's stored libraries
+    // have from before gains had a schedule.
+    let row: TaxConfigRow = serde_json::from_value(json!({
+        "id": 1, "name": "Old", "state_rate": 0.05, "capital_gains_rate": 0.2,
+        "early_withdrawal_penalty_rate": 0.1,
+    }))
+    .unwrap();
+    assert_eq!(row.capital_gains_brackets.len(), 1);
+    assert_eq!(row.capital_gains_brackets[0].threshold, 0.0);
+    assert_eq!(row.capital_gains_brackets[0].rate, 0.2);
+    assert_eq!(row.niit_threshold, None);
+    // Written back, it has a schedule and no rate.
+    let written = serde_json::to_value(&row).unwrap();
+    assert!(written.get("capital_gains_rate").is_none());
+    let again: TaxConfigRow = serde_json::from_value(written).unwrap();
+    assert_eq!(again.capital_gains_brackets.len(), 1);
+
+    let stored: LibraryTaxConfig = serde_json::from_value(json!({
+        "id": 1, "name": "Old", "description": null, "state_rate": 0.05,
+        "capital_gains_rate": 0.15, "early_withdrawal_penalty_rate": 0.1,
+        "standard_deduction": 0.0, "age_65_extra_deduction": 0.0,
+        "federal_brackets": [{"threshold": 0.0, "rate": 0.1}],
+    }))
+    .unwrap();
+    assert_eq!(
+        stored.capital_gains_brackets,
+        vec![Bracket {
+            threshold: 0.0,
+            rate: 0.15
+        }]
+    );
+    let again: LibraryTaxConfig =
+        serde_json::from_value(serde_json::to_value(&stored).unwrap()).unwrap();
+    assert_eq!(again, stored);
+}
+
+#[test]
+fn a_tax_configs_gains_schedule_and_niit_threshold_are_edited_and_cleared() {
+    let mut library = seed();
+    let id = library.tax_configs[0].id;
+    assert_eq!(library.tax_configs[0].capital_gains_brackets.len(), 3);
+
+    let update = |library: &mut Library, body: Value| {
+        apply_library(
+            library,
+            &[],
+            &op(json!({"op": "update_tax_config", "id": id, "body": body})),
+        )
+    };
+    update(
+        &mut library,
+        json!({"niit_threshold": 200000.0,
+               "capital_gains_brackets": [{"threshold": 94050.0, "rate": 0.15}, {"threshold": 0.0, "rate": 0.0}]}),
+    )
+    .unwrap();
+    let config = &library.tax_configs[0];
+    assert_eq!(config.niit_threshold, Some(200_000.0));
+    assert_eq!(config.capital_gains_brackets[0].threshold, 0.0, "sorted");
+
+    // Absent leaves the threshold; null removes it.
+    update(&mut library, json!({"state_rate": 0.04})).unwrap();
+    assert_eq!(library.tax_configs[0].niit_threshold, Some(200_000.0));
+    update(&mut library, json!({"niit_threshold": null})).unwrap();
+    assert_eq!(library.tax_configs[0].niit_threshold, None);
+
+    // A schedule the engine could not walk is refused, and so is a negative
+    // threshold.
+    let before = library.clone();
+    for body in [
+        json!({"capital_gains_brackets": []}),
+        json!({"capital_gains_brackets": [{"threshold": 100.0, "rate": 0.15}]}),
+        json!({"niit_threshold": -1.0}),
+    ] {
+        update(&mut library, body).unwrap_err();
+        assert_eq!(library, before);
+    }
+
+    // Creating one needs a schedule.
+    let missing = serde_json::from_value::<LibraryOp>(json!({"op": "create_tax_config", "body": {
+        "name": "No gains", "federal_brackets": [{"threshold": 0.0, "rate": 0.1}],
+    }}));
+    assert!(missing.is_err());
+}

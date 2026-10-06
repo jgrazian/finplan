@@ -21,7 +21,7 @@ use finplan_core::model::{
 use jiff::civil::Date;
 
 use crate::error::{PlanError, PlanResult};
-use crate::graph::{DistributionRow, ScenarioGraph};
+use crate::graph::{DistributionRow, ScenarioGraph, TaxBracketRow};
 use crate::specs::repayment_of;
 use idmap::IdMap;
 
@@ -469,47 +469,51 @@ pub fn compile(graph: &ScenarioGraph) -> PlanResult<CompiledScenario> {
     })
 }
 
-/// The plan's tax config as the engine takes it: its federal brackets as
-/// configured (before any deduction or indexing), or the engine's default
-/// when the plan has none.
+/// The plan's tax config as the engine takes it: its federal and capital
+/// gains brackets as configured (before any deduction or indexing), or the
+/// engine's default when the plan has none.
 pub fn tax_config(graph: &ScenarioGraph) -> PlanResult<TaxConfig> {
     Ok(match &graph.tax_config {
-        Some(cfg) => {
-            let federal_brackets: Vec<TaxBracket> = graph
-                .tax_brackets
-                .iter()
-                .map(|b| TaxBracket {
-                    threshold: b.threshold,
-                    rate: b.rate,
-                })
-                .collect();
-
-            // The engine walks brackets assuming ascending thresholds starting
-            // at zero; an empty or gapped set would silently under-tax.
-            if federal_brackets.is_empty() {
-                return Err(PlanError::unprocessable(format!(
-                    "tax config '{}' has no federal brackets",
-                    cfg.name
-                )));
-            }
-            if federal_brackets[0].threshold != 0.0 {
-                return Err(PlanError::unprocessable(format!(
-                    "tax config '{}' must have a bracket starting at 0",
-                    cfg.name
-                )));
-            }
-
-            TaxConfig {
-                federal_brackets,
-                state_rate: cfg.state_rate,
-                capital_gains_rate: cfg.capital_gains_rate,
-                early_withdrawal_penalty_rate: cfg.early_withdrawal_penalty_rate,
-                standard_deduction: cfg.standard_deduction,
-                age_65_extra_deduction: cfg.age_65_extra_deduction,
-            }
-        }
+        Some(cfg) => TaxConfig {
+            federal_brackets: schedule(&cfg.name, "federal", &graph.tax_brackets)?,
+            capital_gains_brackets: schedule(
+                &cfg.name,
+                "capital gains",
+                &cfg.capital_gains_brackets,
+            )?,
+            niit_threshold: cfg.niit_threshold,
+            state_rate: cfg.state_rate,
+            early_withdrawal_penalty_rate: cfg.early_withdrawal_penalty_rate,
+            standard_deduction: cfg.standard_deduction,
+            age_65_extra_deduction: cfg.age_65_extra_deduction,
+        },
         None => TaxConfig::default(),
     })
+}
+
+/// A bracket table as the engine's, ascending. The engine walks brackets
+/// assuming ascending thresholds starting at zero; an empty or gapped set
+/// would silently under-tax.
+fn schedule(config: &str, name: &str, rows: &[TaxBracketRow]) -> PlanResult<Vec<TaxBracket>> {
+    let mut brackets: Vec<TaxBracket> = rows
+        .iter()
+        .map(|b| TaxBracket {
+            threshold: b.threshold,
+            rate: b.rate,
+        })
+        .collect();
+    brackets.sort_by(|a, b| a.threshold.total_cmp(&b.threshold));
+    if brackets.is_empty() {
+        return Err(PlanError::unprocessable(format!(
+            "tax config '{config}' has no {name} brackets"
+        )));
+    }
+    if brackets[0].threshold != 0.0 {
+        return Err(PlanError::unprocessable(format!(
+            "tax config '{config}' must have a {name} bracket starting at 0"
+        )));
+    }
+    Ok(brackets)
 }
 
 /// A stored strategy name (and bracket ceiling) as the engine's order; shared

@@ -37,7 +37,7 @@ use crate::edit::{EditOutcome, renumber};
 use crate::error::{PlanError, PlanResult};
 use crate::graph::{
     DistributionRow, InflationEntry, ReturnProfileRow, ScenarioGraph, TaxBracketRow,
-    TaxConfigEntry, TaxConfigRow,
+    TaxConfigEntry, TaxConfigRow, gains_schedule,
 };
 use crate::specs::profiles::{
     self, AssetClass, CreateProfile, DistributionSpec, UpdateProfile, check_inflation_kind,
@@ -70,20 +70,94 @@ pub struct LibraryInflationProfile {
     pub sort_order: i64,
 }
 
-/// A tax config of the library with its bracket table (ascending thresholds),
-/// listed by name.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+/// A tax config of the library with its bracket tables (ascending
+/// thresholds), listed by name.
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
 #[ts(export)]
 pub struct LibraryTaxConfig {
     pub id: i64,
     pub name: String,
     pub description: Option<String>,
     pub state_rate: f64,
-    pub capital_gains_rate: f64,
     pub early_withdrawal_penalty_rate: f64,
     pub standard_deduction: f64,
     pub age_65_extra_deduction: f64,
+    /// Where the 3.8% net investment income tax starts; `None` leaves it out.
+    pub niit_threshold: Option<f64>,
     pub federal_brackets: Vec<Bracket>,
+    pub capital_gains_brackets: Vec<Bracket>,
+}
+
+/// [`LibraryTaxConfig`] as the browser has stored it: a library saved before
+/// gains had a schedule has a flat `capital_gains_rate` instead.
+#[derive(Deserialize)]
+struct LibraryTaxConfigJson {
+    id: i64,
+    name: String,
+    description: Option<String>,
+    state_rate: f64,
+    early_withdrawal_penalty_rate: f64,
+    standard_deduction: f64,
+    age_65_extra_deduction: f64,
+    #[serde(default)]
+    niit_threshold: Option<f64>,
+    federal_brackets: Vec<Bracket>,
+    #[serde(default)]
+    capital_gains_brackets: Vec<Bracket>,
+    #[serde(default)]
+    capital_gains_rate: Option<f64>,
+}
+
+impl<'de> Deserialize<'de> for LibraryTaxConfig {
+    fn deserialize<D: serde::Deserializer<'de>>(de: D) -> Result<Self, D::Error> {
+        let json = LibraryTaxConfigJson::deserialize(de)?;
+        let capital_gains_brackets = gains_schedule(
+            json.capital_gains_brackets
+                .iter()
+                .map(|b| TaxBracketRow {
+                    threshold: b.threshold,
+                    rate: b.rate,
+                })
+                .collect(),
+            json.capital_gains_rate,
+        );
+        Ok(Self {
+            id: json.id,
+            name: json.name,
+            description: json.description,
+            state_rate: json.state_rate,
+            early_withdrawal_penalty_rate: json.early_withdrawal_penalty_rate,
+            standard_deduction: json.standard_deduction,
+            age_65_extra_deduction: json.age_65_extra_deduction,
+            niit_threshold: json.niit_threshold,
+            federal_brackets: json.federal_brackets,
+            capital_gains_brackets: brackets_of(&capital_gains_brackets),
+        })
+    }
+}
+
+/// Bracket rows as the API's brackets.
+pub(crate) fn brackets_of(rows: &[TaxBracketRow]) -> Vec<Bracket> {
+    rows.iter()
+        .map(|b| Bracket {
+            threshold: b.threshold,
+            rate: b.rate,
+        })
+        .collect()
+}
+
+/// The API's brackets as rows, ascending as the loader reads them
+/// (`ORDER BY threshold`).
+pub(crate) fn rows_of(brackets: &[Bracket]) -> Vec<TaxBracketRow> {
+    let mut rows: Vec<TaxBracketRow> = brackets
+        .iter()
+        .map(|b| TaxBracketRow {
+            threshold: b.threshold,
+            rate: b.rate,
+        })
+        .collect();
+    rows.sort_by(|a, b| a.threshold.total_cmp(&b.threshold));
+    rows
 }
 
 /// The user's library as a value. Every list is in id order; the order the
@@ -129,29 +203,44 @@ impl LibraryReturnProfile {
 }
 
 impl LibraryTaxConfig {
+    /// A plan's own copy of its tax config (`config`, with the plan's
+    /// `federal` brackets) as a library row named `name`, as an import adds
+    /// one the library had no match for.
+    #[must_use]
+    pub fn from_plan(
+        id: i64,
+        name: String,
+        config: &TaxConfigRow,
+        federal: &[TaxBracketRow],
+    ) -> Self {
+        Self {
+            id,
+            name,
+            description: None,
+            state_rate: config.state_rate,
+            early_withdrawal_penalty_rate: config.early_withdrawal_penalty_rate,
+            standard_deduction: config.standard_deduction,
+            age_65_extra_deduction: config.age_65_extra_deduction,
+            niit_threshold: config.niit_threshold,
+            federal_brackets: brackets_of(federal),
+            capital_gains_brackets: brackets_of(&config.capital_gains_brackets),
+        }
+    }
+
     pub(crate) fn entry(&self) -> TaxConfigEntry {
-        let mut brackets: Vec<TaxBracketRow> = self
-            .federal_brackets
-            .iter()
-            .map(|b| TaxBracketRow {
-                threshold: b.threshold,
-                rate: b.rate,
-            })
-            .collect();
-        // The loader reads them `ORDER BY threshold`.
-        brackets.sort_by(|a, b| a.threshold.total_cmp(&b.threshold));
         TaxConfigEntry {
             config: TaxConfigRow {
                 id: self.id,
                 name: self.name.clone(),
                 state_rate: self.state_rate,
-                capital_gains_rate: self.capital_gains_rate,
                 early_withdrawal_penalty_rate: self.early_withdrawal_penalty_rate,
                 standard_deduction: self.standard_deduction,
                 age_65_extra_deduction: self.age_65_extra_deduction,
+                niit_threshold: self.niit_threshold,
+                capital_gains_brackets: rows_of(&self.capital_gains_brackets),
             },
             description: self.description.clone(),
-            brackets,
+            brackets: rows_of(&self.federal_brackets),
         }
     }
 }
@@ -274,18 +363,12 @@ impl Library {
                 name: t.config.name.clone(),
                 description: t.description.clone(),
                 state_rate: t.config.state_rate,
-                capital_gains_rate: t.config.capital_gains_rate,
                 early_withdrawal_penalty_rate: t.config.early_withdrawal_penalty_rate,
                 standard_deduction: t.config.standard_deduction,
                 age_65_extra_deduction: t.config.age_65_extra_deduction,
-                federal_brackets: t
-                    .brackets
-                    .iter()
-                    .map(|b| Bracket {
-                        threshold: b.threshold,
-                        rate: b.rate,
-                    })
-                    .collect(),
+                niit_threshold: t.config.niit_threshold,
+                federal_brackets: brackets_of(&t.brackets),
+                capital_gains_brackets: brackets_of(&t.config.capital_gains_brackets),
             })
             .collect();
         tax_configs.sort_by_key(|t| t.id);
@@ -435,7 +518,7 @@ pub(crate) fn new_tax_config<'a>(
     taken: impl IntoIterator<Item = &'a str>,
     id: i64,
 ) -> PlanResult<LibraryTaxConfig> {
-    let brackets = taxes::checked(body)?;
+    let (brackets, capital_gains_brackets) = taxes::checked(body)?;
     let name = body.name.trim();
     if name.is_empty() {
         return Err(PlanError::invalid("a tax config needs a name"));
@@ -448,11 +531,12 @@ pub(crate) fn new_tax_config<'a>(
         name: name.to_string(),
         description: body.description.clone(),
         state_rate: body.state_rate,
-        capital_gains_rate: body.capital_gains_rate,
         early_withdrawal_penalty_rate: body.early_withdrawal_penalty_rate,
         standard_deduction: body.standard_deduction,
         age_65_extra_deduction: body.age_65_extra_deduction,
+        niit_threshold: body.niit_threshold,
         federal_brackets: brackets,
+        capital_gains_brackets,
     })
 }
 
@@ -736,10 +820,10 @@ fn update_tax_config(library: &mut Library, id: i64, body: &UpdateTaxConfig) -> 
     taxes::validate_deductions([
         ("standard_deduction", body.standard_deduction),
         ("age_65_extra_deduction", body.age_65_extra_deduction),
+        ("niit_threshold", body.niit_threshold.flatten()),
     ])?;
     taxes::validate_rates([
         ("state_rate", body.state_rate),
-        ("capital_gains_rate", body.capital_gains_rate),
         (
             "early_withdrawal_penalty_rate",
             body.early_withdrawal_penalty_rate,
@@ -748,7 +832,12 @@ fn update_tax_config(library: &mut Library, id: i64, body: &UpdateTaxConfig) -> 
     let brackets = body
         .federal_brackets
         .as_deref()
-        .map(taxes::validate_brackets)
+        .map(|b| taxes::validate_brackets(taxes::FEDERAL, b))
+        .transpose()?;
+    let capital_gains_brackets = body
+        .capital_gains_brackets
+        .as_deref()
+        .map(|b| taxes::validate_brackets(taxes::CAPITAL_GAINS, b))
         .transpose()?;
     let name = body.name.as_deref().map(str::trim);
     if let Some(name) = name {
@@ -778,9 +867,6 @@ fn update_tax_config(library: &mut Library, id: i64, body: &UpdateTaxConfig) -> 
     if let Some(rate) = body.state_rate {
         row.state_rate = rate;
     }
-    if let Some(rate) = body.capital_gains_rate {
-        row.capital_gains_rate = rate;
-    }
     if let Some(rate) = body.early_withdrawal_penalty_rate {
         row.early_withdrawal_penalty_rate = rate;
     }
@@ -790,8 +876,14 @@ fn update_tax_config(library: &mut Library, id: i64, body: &UpdateTaxConfig) -> 
     if let Some(amount) = body.age_65_extra_deduction {
         row.age_65_extra_deduction = amount;
     }
+    if let Some(threshold) = body.niit_threshold {
+        row.niit_threshold = threshold;
+    }
     if let Some(brackets) = brackets {
         row.federal_brackets = brackets;
+    }
+    if let Some(brackets) = capital_gains_brackets {
+        row.capital_gains_brackets = brackets;
     }
     Ok(())
 }
@@ -957,13 +1049,20 @@ pub fn seed() -> Library {
         id: 1,
         name: "US Federal 2024 (single)".to_string(),
         description: Some(
-            "2024 federal brackets and standard deduction, 5% state, 15% LTCG".to_string(),
+            "2024 federal and capital gains brackets and standard deduction, 5% state".to_string(),
         ),
         state_rate: 0.05,
-        capital_gains_rate: 0.15,
         early_withdrawal_penalty_rate: 0.10,
         standard_deduction: 14_600.0,
         age_65_extra_deduction: 1_950.0,
+        niit_threshold: None,
+        capital_gains_brackets: finplan_core::model::TaxConfig::us_2024_single_gains_brackets()
+            .into_iter()
+            .map(|b| Bracket {
+                threshold: b.threshold,
+                rate: b.rate,
+            })
+            .collect(),
         federal_brackets: [
             (0.0, 0.10),
             (11_600.0, 0.12),

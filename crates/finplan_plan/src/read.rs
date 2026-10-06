@@ -16,8 +16,8 @@ use std::collections::HashMap;
 
 use crate::compile;
 use crate::error::{PlanError, PlanResult};
-use crate::graph::{DistributionRow, ScenarioGraph, TaxConfigEntry};
-use crate::library::{listed, listed_by_name};
+use crate::graph::{DistributionRow, ScenarioGraph, TaxBracketRow, TaxConfigEntry};
+use crate::library::{brackets_of, listed, listed_by_name};
 use crate::specs::accounts::{
     Account, ContributionPeriod, FlavorSpec, PlanType, Position, TaxStatus,
 };
@@ -26,7 +26,7 @@ use crate::specs::events::Event;
 use crate::specs::parameters::{NamedParameter, usages};
 use crate::specs::profiles::{AssetClass, DistributionSpec, HistoryPreset, Profile};
 use crate::specs::scenarios::{CompileReport, Scenario, ScenarioStatus};
-use crate::specs::taxes::{Bracket, TaxConfig};
+use crate::specs::taxes::TaxConfig;
 
 pub use crate::expressions::{ExpressionValidation, validate_effect as validate_expression};
 pub use crate::preflight::{PreflightIssue, PreflightReport, preflight};
@@ -460,23 +460,22 @@ pub fn tax_config(graph: &ScenarioGraph, id: i64) -> PlanResult<TaxConfig> {
 
 fn tax_config_of(entry: &TaxConfigEntry) -> TaxConfig {
     let config = &entry.config;
-    let mut brackets = entry.brackets.clone();
-    brackets.sort_by(|a, b| a.threshold.total_cmp(&b.threshold));
     TaxConfig {
         id: config.id,
         name: config.name.clone(),
         description: entry.description.clone(),
         state_rate: config.state_rate,
-        capital_gains_rate: config.capital_gains_rate,
         early_withdrawal_penalty_rate: config.early_withdrawal_penalty_rate,
         standard_deduction: config.standard_deduction,
         age_65_extra_deduction: config.age_65_extra_deduction,
-        federal_brackets: brackets
-            .into_iter()
-            .map(|b| Bracket {
-                threshold: b.threshold,
-                rate: b.rate,
-            })
-            .collect(),
+        niit_threshold: config.niit_threshold,
+        federal_brackets: brackets_of(&sorted(&entry.brackets)),
+        capital_gains_brackets: brackets_of(&sorted(&config.capital_gains_brackets)),
     }
+}
+
+fn sorted(rows: &[TaxBracketRow]) -> Vec<TaxBracketRow> {
+    let mut rows = rows.to_vec();
+    rows.sort_by(|a, b| a.threshold.total_cmp(&b.threshold));
+    rows
 }

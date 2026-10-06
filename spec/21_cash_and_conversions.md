@@ -197,11 +197,11 @@ tranche penalty enforced; the tests say which is modeled.
 **Not modeled** (said in the event editor's help, and in the open questions):
 IRMAA Medicare surcharges, ACA premium credits, and the taxable share of Social
 Security, all of which a real conversion plan watches. The engine taxes Social
-Security as the plan's `IncomeType` says, and gains at a flat
-`capital_gains_rate`. In law, long-term gains stack on top of ordinary income,
-so each converted dollar can push a dollar of gains out of the 0% band. For a
-plan that lives on taxable sales while converting, that interaction is a large
-part of the answer, and this engine does not yet see it.
+Security as the plan's `IncomeType` says. Long-term gains stack on top of
+ordinary income in the tax config's gains brackets (since `0028`), so each
+converted dollar can push a dollar of gains out of the 0% band, and the engine
+sees it: a conversion's income is in the year's total before any sale after
+it is taxed.
 
 ### Plan model
 
@@ -449,9 +449,9 @@ so a note's path is an `expand_template` step like the existing ones.
 2. Model QCDs (qualified charitable distributions, from 70½, up to a yearly
    limit, counting toward the RMD and untaxed)? Only if plans carry charitable
    giving; it would be an `ApplyRmd` option.
-3. Stack long-term gains on ordinary income (a 0% / 15% / 20% gains schedule)?
-   It changes every taxable sale, so it is its own spec, but conversion advice
-   is only as good as this.
+3. ~~Stack long-term gains on ordinary income (a 0% / 15% / 20% gains
+   schedule)?~~ Done: tax configs carry `capital_gains_brackets` and an
+   optional `niit_threshold` in place of the flat rate (migration `0028`).
 4. Should `bracket_room` count the year's income still to come (a salary paid
    monthly through December), so a mid-year conversion is right too? It would
    need the engine to project the rest of the year; year-end scheduling avoids

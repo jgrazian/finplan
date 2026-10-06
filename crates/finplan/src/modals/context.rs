@@ -758,7 +758,6 @@ pub enum AmountContext {
 #[derive(Debug, Clone, PartialEq)]
 pub enum TaxConfigContext {
     StateRate,
-    CapGainsRate,
     FederalBrackets,
 }
 

@@ -1651,6 +1651,12 @@ async fn scenario_settings_match_the_route() {
         &[json!(tax)],
     )
     .await;
+    scalar(
+        &plan.db,
+        "INSERT INTO tax_gain_brackets(tax_config_id,threshold,rate) VALUES (?,0,0.15) RETURNING id",
+        &[json!(tax)],
+    )
+    .await;
     let mut mem = plan.load().await;
     assert!(mem.tax_configs.contains_key(&tax) && mem.inflation_profiles.contains_key(&inflation));
 
@@ -1937,8 +1943,9 @@ async fn created_tax_configs_match_the_route() {
     let config = |value: Value| -> CreateTaxConfig { serde_json::from_value(value).unwrap() };
 
     let body = config(json!({
-        "name": " Single, CO ", "state_rate": 0.044,
-        "federal_brackets": [{"threshold": 11000.0, "rate": 0.12}, {"threshold": 0.0, "rate": 0.10}]
+        "name": " Single, CO ", "state_rate": 0.044, "niit_threshold": 200000.0,
+        "federal_brackets": [{"threshold": 11000.0, "rate": 0.12}, {"threshold": 0.0, "rate": 0.10}],
+        "capital_gains_brackets": [{"threshold": 47025.0, "rate": 0.15}, {"threshold": 0.0, "rate": 0.0}]
     }));
     let sql_id = {
         let mut tx = plan.db.begin().await.unwrap();
@@ -1953,15 +1960,17 @@ async fn created_tax_configs_match_the_route() {
         serde_json::to_value((
             &a.config.name,
             a.config.state_rate,
-            a.config.capital_gains_rate,
-            a.config.early_withdrawal_penalty_rate
+            a.config.early_withdrawal_penalty_rate,
+            a.config.niit_threshold,
+            &a.config.capital_gains_brackets
         ))
         .unwrap(),
         serde_json::to_value((
             &b.config.name,
             b.config.state_rate,
-            b.config.capital_gains_rate,
-            b.config.early_withdrawal_penalty_rate
+            b.config.early_withdrawal_penalty_rate,
+            b.config.niit_threshold,
+            &b.config.capital_gains_brackets
         ))
         .unwrap(),
     );
@@ -1970,15 +1979,30 @@ async fn created_tax_configs_match_the_route() {
         serde_json::to_value(&b.brackets).unwrap()
     );
     assert_eq!(a.config.name, "Single, CO");
-    assert_eq!(a.config.capital_gains_rate, 0.15);
+    assert_eq!(a.config.capital_gains_brackets.len(), 2);
+    assert_eq!(
+        a.config.capital_gains_brackets[0].threshold, 0.0,
+        "ascending"
+    );
+    assert_eq!(a.config.niit_threshold, Some(200_000.0));
 
-    for body in [
+    let gains = json!([{"threshold": 0.0, "rate": 0.15}]);
+    for mut body in [
         json!({"name": "Single, CO", "federal_brackets": [{"threshold": 0.0, "rate": 0.1}]}),
         json!({"name": "None", "federal_brackets": []}),
         json!({"name": "Gap", "federal_brackets": [{"threshold": 5.0, "rate": 0.1}]}),
         json!({"name": "Percent", "federal_brackets": [{"threshold": 0.0, "rate": 10.0}]}),
         json!({"name": "Rates", "state_rate": 4.4, "federal_brackets": [{"threshold": 0.0, "rate": 0.1}]}),
+        json!({"name": "No gains", "federal_brackets": [{"threshold": 0.0, "rate": 0.1}],
+               "capital_gains_brackets": []}),
+        json!({"name": "Gains gap", "federal_brackets": [{"threshold": 0.0, "rate": 0.1}],
+               "capital_gains_brackets": [{"threshold": 100.0, "rate": 0.15}]}),
+        json!({"name": "NIIT", "niit_threshold": -1.0,
+               "federal_brackets": [{"threshold": 0.0, "rate": 0.1}]}),
     ] {
+        if body.get("capital_gains_brackets").is_none() {
+            body["capital_gains_brackets"] = gains.clone();
+        }
         let body = config(body);
         let mut tx = plan.db.begin().await.unwrap();
         let sql = taxes::create_in(&mut tx, &plan.user, &body)
@@ -2496,6 +2520,12 @@ async fn inflation_profile_edits_match_the_routes() {
         &[json!(tax)],
     )
     .await;
+    scalar(
+        &plan.db,
+        "INSERT INTO tax_gain_brackets(tax_config_id,threshold,rate) VALUES (?,0,0.15) RETURNING id",
+        &[json!(tax)],
+    )
+    .await;
     lib = plan.library().await;
     plan.assume(&mut mem, &lib, tax, steady).await;
     assert_eq!(mem.scenario.inflation_profile_id, Some(steady));
@@ -2534,10 +2564,12 @@ async fn tax_config_edits_match_the_routes() {
 
     for body in [
         json!({"name": " Single, CO ", "state_rate": 0.044, "description": "Colorado",
-               "federal_brackets": [{"threshold": 11000.0, "rate": 0.12}, {"threshold": 0.0, "rate": 0.10}]}),
-        json!({"name": "Flat", "capital_gains_rate": 0.2, "standard_deduction": 14600.0,
-               "age_65_extra_deduction": 1950.0,
-               "federal_brackets": [{"threshold": 0.0, "rate": 0.2}]}),
+               "federal_brackets": [{"threshold": 11000.0, "rate": 0.12}, {"threshold": 0.0, "rate": 0.10}],
+               "capital_gains_brackets": [{"threshold": 0.0, "rate": 0.0}, {"threshold": 47025.0, "rate": 0.15}]}),
+        json!({"name": "Flat", "standard_deduction": 14600.0,
+               "age_65_extra_deduction": 1950.0, "niit_threshold": 200000.0,
+               "federal_brackets": [{"threshold": 0.0, "rate": 0.2}],
+               "capital_gains_brackets": [{"threshold": 0.0, "rate": 0.2}]}),
     ] {
         let sql = {
             let mut tx = plan.db.begin().await.unwrap();
@@ -2590,10 +2622,17 @@ async fn tax_config_edits_match_the_routes() {
         (
             co,
             json!({"standard_deduction": 15000.0, "age_65_extra_deduction": 2000.0,
-                    "capital_gains_rate": 0.18, "early_withdrawal_penalty_rate": 0.0,
+                    "early_withdrawal_penalty_rate": 0.0, "niit_threshold": 250000.0,
                     "description": "Updated"}),
         ),
+        (
+            co,
+            json!({"capital_gains_brackets": [{"threshold": 96700.0, "rate": 0.15},
+                                               {"threshold": 0.0, "rate": 0.0},
+                                               {"threshold": 600050.0, "rate": 0.2}]}),
+        ),
         (flat, json!({"name": "Flat tax"})),
+        (flat, json!({"niit_threshold": null})),
     ] {
         taxes::update_in(&plan.db, &plan.user, id, &tax_update(edit.clone()))
             .await
@@ -2623,6 +2662,12 @@ async fn tax_config_edits_match_the_routes() {
             json!({"federal_brackets": [{"threshold": 0.0, "rate": 10.0}]}),
         ),
         (co, json!({"standard_deduction": -1.0})),
+        (co, json!({"niit_threshold": -1.0})),
+        (co, json!({"capital_gains_brackets": []})),
+        (
+            co,
+            json!({"capital_gains_brackets": [{"threshold": 5.0, "rate": 0.15}]}),
+        ),
         (9999, json!({"state_rate": 0.1})),
     ] {
         let sql = taxes::update_in(&plan.db, &plan.user, id, &tax_update(edit.clone()))

@@ -271,7 +271,7 @@ impl Expression {
                                 "bracket_room({rate}): no bracket is taxed above this rate"
                             ));
                         }
-                        (ceiling - state.taxes.ytd_tax.ordinary_income).max(0.0)
+                        (ceiling - state.taxes.ytd_income().ordinary).max(0.0)
                     }
                     Op::Clamp => {
                         let lower = number(1)?;

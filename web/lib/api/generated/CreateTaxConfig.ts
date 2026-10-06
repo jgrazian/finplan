@@ -5,7 +5,6 @@ export type CreateTaxConfig = {
   name: string;
   description?: string | null;
   state_rate: number;
-  capital_gains_rate: number;
   early_withdrawal_penalty_rate: number;
   /**
    * Federal standard deduction for the brackets' year and filing status,
@@ -17,5 +16,15 @@ export type CreateTaxConfig = {
    * dollars (default 0); for a married couple, both spouses' together.
    */
   age_65_extra_deduction: number;
+  /**
+   * Where the 3.8% net investment income tax starts ($200,000 single,
+   * $250,000 married filing jointly); omitted, it is left out.
+   */
+  niit_threshold?: number | null;
   federal_brackets: Array<Bracket>;
+  /**
+   * The long-term capital gains brackets for the same year and filing
+   * status, over taxable income (e.g. 0% from 0, 15%, 20%).
+   */
+  capital_gains_brackets: Array<Bracket>;
 };

@@ -13,7 +13,10 @@ use crate::{
         AccountId, AmountMode, AssetCoord, AssetId, AssetLot, CashFlowKind, ConversionTranche,
         InvestmentContainer, LotMethod, Market, TaxConfig, TaxStatus, TaxedIncome,
     },
-    taxes::{calculate_federal_marginal_tax, calculate_gross_from_net},
+    taxes::{
+        YtdIncome, calculate_federal_marginal_tax, calculate_gross_from_net,
+        calculate_realized_gains_tax,
+    },
 };
 
 /// Calculate current price for an asset using the Market struct
@@ -56,13 +59,82 @@ pub struct LiquidationParams<'a> {
     pub current_date: Date,
     /// Tax configuration for calculating taxes
     pub tax_config: &'a TaxConfig,
-    /// Year-to-date ordinary income for marginal tax calculation
-    pub ytd_ordinary_income: f64,
+    /// Income the tax year has seen before this sale, for marginal rates
+    pub ytd: YtdIncome,
     /// Whether early withdrawal penalty applies (person below age 59.5)
     pub early_withdrawal_penalty_applies: bool,
     /// The account's Roth conversions, oldest first (tax-free accounts only;
     /// empty otherwise), for the five-year rule
     pub conversion_tranches: &'a [ConversionTranche],
+}
+
+/// The gross sale of `asset_coord`'s holding in `params.investment` that
+/// nets `net` after the tax and penalty a sale withholds, capped at what the
+/// holding is worth. `params.amount` and `params.amount_mode` are ignored.
+///
+/// Tax-deferred: the ordinary brackets inverted from where the year stands.
+/// Taxable: solved against the lots the sale would actually consume, since
+/// the gain in each dollar sold depends on which lots it comes from.
+/// Tax-free: the net itself; a recent conversion's penalty before 59½ is
+/// not grossed up.
+#[must_use]
+pub fn gross_for_net(params: &LiquidationParams, net: f64) -> f64 {
+    let lots: Vec<AssetLot> = params
+        .investment
+        .positions
+        .iter()
+        .filter(|lot| lot.asset_id == params.asset_coord.asset_id)
+        .copied()
+        .collect();
+    let available = lots.iter().map(|l| l.units).sum::<f64>() * params.current_price;
+    if net <= 0.0 || available <= 0.0 {
+        return 0.0;
+    }
+
+    match params.investment.tax_status {
+        TaxStatus::TaxDeferred => calculate_gross_from_net(
+            net,
+            params.ytd.ordinary,
+            &params.tax_config.federal_brackets,
+            params.tax_config.state_rate
+                + if params.early_withdrawal_penalty_applies {
+                    params.tax_config.early_withdrawal_penalty_rate
+                } else {
+                    0.0
+                },
+        )
+        .min(available),
+        TaxStatus::TaxFree => net.min(available),
+        TaxStatus::Taxable => {
+            // gross = net + tax(gross): tax grows slower than the gross (no
+            // rate reaches 100%), so iterating from the net climbs to it.
+            let tax_on = |gross: f64| {
+                let sold = consume_lots(
+                    &lots,
+                    gross,
+                    params.current_price,
+                    params.lot_method,
+                    params.current_date,
+                );
+                calculate_realized_gains_tax(
+                    sold.short_term_gain,
+                    sold.long_term_gain,
+                    params.tax_config,
+                    params.ytd,
+                )
+                .total_tax
+            };
+            let mut gross = net.min(available);
+            for _ in 0..64 {
+                let next = (net + tax_on(gross)).min(available);
+                if (next - gross).abs() < 0.005 {
+                    return next;
+                }
+                gross = next;
+            }
+            gross
+        }
+    }
 }
 
 /// Liquidate assets from an investment container.
@@ -137,40 +209,32 @@ fn liquidate_taxable_into(
     push_lot_subtractions(params.asset_coord, &lot_result, out);
 
     let gross_amount = lot_result.proceeds;
-    let mut net_amount = gross_amount;
+    let tax = calculate_realized_gains_tax(
+        lot_result.short_term_gain,
+        lot_result.long_term_gain,
+        params.tax_config,
+        params.ytd,
+    );
 
     // Short-term gains taxed as ordinary income
     if lot_result.short_term_gain > 0.0 {
-        let federal_short_term_tax = calculate_federal_marginal_tax(
-            lot_result.short_term_gain,
-            params.ytd_ordinary_income,
-            &params.tax_config.federal_brackets,
-        );
-        let state_short_term_tax = lot_result.short_term_gain * params.tax_config.state_rate;
-
         out.push(EvalEvent::ShortTermCapitalGainsTax {
             gross_gain_amount: lot_result.short_term_gain,
-            federal_tax: federal_short_term_tax,
-            state_tax: state_short_term_tax,
+            federal_tax: tax.short_term_federal_tax,
+            state_tax: lot_result.short_term_gain * params.tax_config.state_rate,
         });
-
-        net_amount -= federal_short_term_tax + state_short_term_tax;
     }
 
-    // Long-term gains taxed at capital gains rate
+    // Long-term gains stacked on ordinary income in the gains brackets
     if lot_result.long_term_gain > 0.0 {
-        let federal_long_term_tax =
-            lot_result.long_term_gain * params.tax_config.capital_gains_rate;
-        let state_long_term_tax = lot_result.long_term_gain * params.tax_config.state_rate;
-
         out.push(EvalEvent::LongTermCapitalGainsTax {
             gross_gain_amount: lot_result.long_term_gain,
-            federal_tax: federal_long_term_tax,
-            state_tax: state_long_term_tax,
+            federal_tax: tax.long_term_federal_tax,
+            state_tax: lot_result.long_term_gain * params.tax_config.state_rate,
         });
-
-        net_amount -= federal_long_term_tax + state_long_term_tax;
     }
+
+    let net_amount = gross_amount - tax.total_tax;
 
     out.push(EvalEvent::CashCredit {
         to: params.to_account,
@@ -206,7 +270,7 @@ fn liquidate_tax_deferred_into(
     let (net_amount, early_withdrawal_penalty) = withhold_distribution_tax(
         gross_amount,
         params.tax_config,
-        params.ytd_ordinary_income,
+        params.ytd.ordinary,
         params.early_withdrawal_penalty_applies,
         out,
     );
@@ -1027,7 +1091,7 @@ mod tests {
             lot_method: LotMethod::Fifo,
             current_date: today,
             tax_config: &tax_config,
-            ytd_ordinary_income: 0.0,
+            ytd: YtdIncome::default(),
             early_withdrawal_penalty_applies: true, // Below age 59.5
             conversion_tranches: &[],
         };
@@ -1093,7 +1157,7 @@ mod tests {
             lot_method: LotMethod::Fifo,
             current_date: today,
             tax_config: &tax_config,
-            ytd_ordinary_income: 0.0,
+            ytd: YtdIncome::default(),
             early_withdrawal_penalty_applies: false, // Age 60, no penalty
             conversion_tranches: &[],
         };
@@ -1139,7 +1203,7 @@ mod tests {
             lot_method: LotMethod::Fifo,
             current_date: today,
             tax_config: &tax_config,
-            ytd_ordinary_income: 0.0,
+            ytd: YtdIncome::default(),
             early_withdrawal_penalty_applies: true, // Even with flag set, taxable should not have penalty
             conversion_tranches: &[],
         };

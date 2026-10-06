@@ -62,7 +62,7 @@ export function toTaxChoices(configs: TaxConfig[]): AssumptionChoice[] {
           : ""),
       note:
         config.description ??
-        `${pct(config.capital_gains_rate * 100)} long-term gains, ${pct(
+        `${config.capital_gains_brackets.map((b) => pct(b.rate * 100)).join(" / ")} long-term gains, ${pct(
           config.early_withdrawal_penalty_rate * 100,
         )} early-withdrawal penalty.`,
     };

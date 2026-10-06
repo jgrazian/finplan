@@ -8,8 +8,9 @@ const config: TaxConfig = {
   name: "Test brackets",
   description: null,
   state_rate: 0.05,
-  capital_gains_rate: 0.15,
   early_withdrawal_penalty_rate: 0.1,
+  niit_threshold: null,
+  capital_gains_brackets: [{ threshold: 0, rate: 0.15 }],
   standard_deduction: 15_000,
   age_65_extra_deduction: 0,
   federal_brackets: [

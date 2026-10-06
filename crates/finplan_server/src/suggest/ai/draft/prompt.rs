@@ -59,7 +59,7 @@ Where a note goes. Give each note a `column`: portfolio (accounts, holdings, the
 
 Questions. Ask at most three questions in the whole draft, and only what neither the documents nor the description answer and that changes the plan: a bonus, one mix or a mix per fund, a retirement age. Each is ask_user with a short prompt and an answer type: choice (two to six labelled options), money, date or text. Prefer choices. A note that depends on an answer is submitted first, with `blocked_by` naming the question's key (or the question names the note's key in `blocks`); it is written for the answer you think most likely and cannot be added until the question is answered. ask_user ends your turn: the person answers, and you continue with their answers, which you may cite as evidence with ref answer. Submit every note that does not wait on an answer before you ask.
 
-Settings every draft needs. The start date is today and is already set; never change it. Use a change on the `scenario` target to set the birth date (from a document's hint or the description, or ask), duration_years (to about age 95 unless the person says otherwise), inflation_profile_id and tax_config_id (from the library; if none fits the person's filing status and state, create one with a new_tax_config target and say so in a check note). Statement balances are treated as current as of today. If a statement is more than 45 days older than today, still use its figures but file a check note saying which statement is old and that the balance may have moved; do not move the start date.
+Settings every draft needs. The start date is today and is already set; never change it. Use a change on the `scenario` target to set the birth date (from a document's hint or the description, or ask), duration_years (to about age 95 unless the person says otherwise), inflation_profile_id and tax_config_id (from the library; if none fits the person's filing status and state, create one with a new_tax_config target, its federal and long-term capital gains brackets and net investment income tax threshold from the facts tool's tax_brackets topic, and say so in a check note). Statement balances are treated as current as of today. If a statement is more than 45 days older than today, still use its figures but file a check note saying which statement is old and that the balance may have moved; do not move the start date.
 
 Holdings and returns. A new asset's name is its ticker symbol alone (VBTLX), and its description is the fund's full name as the statement prints it (Vanguard Total Bond Market Index Fund Admiral Shares); a holding with no ticker gets a short name. Give every holding a return profile by asset class, never one per fund: call find_return_profile for a ticker (or a name, or a class). It returns the user's own profile for the class, else a new_return_profile change to place once for the class. Cash held in a bank or brokerage account uses the cash class. Amounts in accounts come from the statement's balance and positions; a position needs units, cost_basis and purchase_date, and where the statement has no cost basis say so in a check note rather than setting basis equal to value silently.
 
@@ -321,11 +321,13 @@ pub struct LibraryTax {
     pub name: String,
     pub description: Option<String>,
     pub state_rate: f64,
-    pub capital_gains_rate: f64,
     pub early_withdrawal_penalty_rate: f64,
     pub standard_deduction: f64,
     pub age_65_extra_deduction: f64,
+    pub niit_threshold: Option<f64>,
     pub brackets: usize,
+    /// The long-term capital gains schedule, `(threshold, rate)` ascending.
+    pub capital_gains_brackets: Vec<(f64, f64)>,
 }
 
 /// An inflation profile of the user's, for the context.
@@ -469,14 +471,22 @@ pub fn render_context(parts: &ContextParts<'_>) -> String {
     for t in parts.taxes {
         let _ = writeln!(
             out,
-            "- #{} {}: {} federal brackets, standard deduction {} (+{} from 65), state {}, long-term capital gains {}, early-withdrawal penalty {}{}",
+            "- #{} {}: {} federal brackets, standard deduction {} (+{} from 65), state {}, long-term capital gains {}, {}, early-withdrawal penalty {}{}",
             t.id,
             t.name,
             t.brackets,
             money(t.standard_deduction),
             money(t.age_65_extra_deduction),
             pct(t.state_rate),
-            pct(t.capital_gains_rate),
+            t.capital_gains_brackets
+                .iter()
+                .map(|(threshold, rate)| format!("{} from {}", pct(*rate), money(*threshold)))
+                .collect::<Vec<_>>()
+                .join(", "),
+            t.niit_threshold.map_or_else(
+                || "no net investment income tax".to_owned(),
+                |at| format!("3.8% net investment income tax over {}", money(at))
+            ),
             pct(t.early_withdrawal_penalty_rate),
             t.description
                 .as_deref()

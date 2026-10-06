@@ -31,7 +31,7 @@ use std::sync::Mutex;
 
 use axum::Json;
 use axum::extract::{Path, State};
-use finplan_core::model::{TaxBracket, TaxConfig};
+use finplan_core::model::TaxConfig;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tracing::{Instrument, instrument::WithSubscriber};
@@ -910,22 +910,38 @@ impl DraftTools {
             name: String,
             description: Option<String>,
             state_rate: f64,
-            capital_gains_rate: f64,
             early_withdrawal_penalty_rate: f64,
             standard_deduction: f64,
             age_65_extra_deduction: f64,
+            niit_threshold: Option<f64>,
             brackets: i64,
         }
-        let taxes: Vec<TaxRow> = sqlx::query_as(
-            "SELECT t.id, t.name, t.description, t.state_rate, t.capital_gains_rate,
+        let rows: Vec<TaxRow> = sqlx::query_as(
+            "SELECT t.id, t.name, t.description, t.state_rate,
                     t.early_withdrawal_penalty_rate, t.standard_deduction,
-                    t.age_65_extra_deduction,
+                    t.age_65_extra_deduction, t.niit_threshold,
                     (SELECT count(*) FROM tax_brackets b WHERE b.tax_config_id = t.id) AS brackets
                FROM tax_configs t WHERE t.user_id = ?1 ORDER BY t.id",
         )
         .bind(&self.user.id)
         .fetch_all(&state.db)
         .await?;
+        let mut taxes = Vec::with_capacity(rows.len());
+        for t in rows {
+            let gains = crate::db::library::gain_brackets(&state.db, t.id).await?;
+            taxes.push(LibraryTax {
+                id: t.id,
+                name: t.name,
+                description: t.description,
+                state_rate: t.state_rate,
+                early_withdrawal_penalty_rate: t.early_withdrawal_penalty_rate,
+                standard_deduction: t.standard_deduction,
+                age_65_extra_deduction: t.age_65_extra_deduction,
+                niit_threshold: t.niit_threshold,
+                brackets: t.brackets as usize,
+                capital_gains_brackets: gains.iter().map(|b| (b.threshold, b.rate)).collect(),
+            });
+        }
         let inflation: Vec<(i64, String, Option<String>)> = sqlx::query_as(
             "SELECT id, name, description FROM inflation_profiles
               WHERE user_id = ?1 ORDER BY sort_order, id",
@@ -935,20 +951,7 @@ impl DraftTools {
         .await?;
         Ok((
             profiles,
-            taxes
-                .into_iter()
-                .map(|t| LibraryTax {
-                    id: t.id,
-                    name: t.name,
-                    description: t.description,
-                    state_rate: t.state_rate,
-                    capital_gains_rate: t.capital_gains_rate,
-                    early_withdrawal_penalty_rate: t.early_withdrawal_penalty_rate,
-                    standard_deduction: t.standard_deduction,
-                    age_65_extra_deduction: t.age_65_extra_deduction,
-                    brackets: t.brackets as usize,
-                })
-                .collect(),
+            taxes,
             inflation
                 .into_iter()
                 .map(|(id, name, description)| LibraryInflation {
@@ -1093,22 +1096,8 @@ impl ToolHost for DraftTools {
 
     fn plan_tax_config(&self) -> Option<TaxConfig> {
         let graph = self.graph();
-        let config = graph.tax_config.as_ref()?;
-        Some(TaxConfig {
-            federal_brackets: graph
-                .tax_brackets
-                .iter()
-                .map(|b| TaxBracket {
-                    threshold: b.threshold,
-                    rate: b.rate,
-                })
-                .collect(),
-            state_rate: config.state_rate,
-            capital_gains_rate: config.capital_gains_rate,
-            early_withdrawal_penalty_rate: config.early_withdrawal_penalty_rate,
-            standard_deduction: config.standard_deduction,
-            age_65_extra_deduction: config.age_65_extra_deduction,
-        })
+        graph.tax_config.as_ref()?;
+        finplan_plan::compile::tax_config(&graph).ok()
     }
 
     fn resolve_steps(

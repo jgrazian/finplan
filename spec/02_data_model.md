@@ -290,7 +290,8 @@ pub struct MonteCarloStats {
 pub struct TaxConfig {
     pub federal_brackets: Vec<TaxBracket>,   // ascending, first at 0
     pub state_rate: f64,                     // flat, on all taxed income
-    pub capital_gains_rate: f64,             // flat, long-term gains
+    pub capital_gains_brackets: Vec<TaxBracket>, // long-term gains, over taxable income
+    pub niit_threshold: Option<f64>,         // 3.8% NIIT above it; None = off
     pub early_withdrawal_penalty_rate: f64,  // TaxDeferred before 59.5
     pub standard_deduction: f64,             // in the brackets' dollars
     pub age_65_extra_deduction: f64,         // from the year the person turns 65

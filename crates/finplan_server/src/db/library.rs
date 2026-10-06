@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 
-use finplan_plan::graph::DistributionRow;
+use finplan_plan::graph::{DistributionRow, TaxBracketRow};
 use finplan_plan::library::{
     Library, LibraryInflationProfile, LibraryReturnProfile, LibraryTaxConfig,
 };
@@ -12,6 +12,49 @@ use sqlx::{Sqlite, SqliteConnection, Transaction};
 
 use crate::db::Db;
 use crate::error::{ApiError, ApiResult};
+
+/// The `tax_configs` columns a [`finplan_plan::graph::TaxConfigRow`] reads.
+/// Its capital gains schedule is another table: [`gain_brackets`].
+pub const TAX_CONFIG_COLUMNS: &str = "id, name, state_rate, early_withdrawal_penalty_rate,
+     standard_deduction, age_65_extra_deduction, niit_threshold";
+
+/// `tax_config_id`'s capital gains schedule, ascending.
+pub async fn gain_brackets<'e>(
+    db: impl sqlx::Executor<'e, Database = Sqlite>,
+    tax_config_id: i64,
+) -> sqlx::Result<Vec<TaxBracketRow>> {
+    sqlx::query_as(
+        "SELECT threshold, rate FROM tax_gain_brackets
+          WHERE tax_config_id = ?1 ORDER BY threshold ASC",
+    )
+    .bind(tax_config_id)
+    .fetch_all(db)
+    .await
+}
+
+/// Write `brackets` as `tax_config_id`'s capital gains schedule, in place of
+/// any it had.
+pub async fn replace_gain_brackets(
+    conn: &mut SqliteConnection,
+    tax_config_id: i64,
+    brackets: Vec<(f64, f64)>,
+) -> sqlx::Result<()> {
+    sqlx::query("DELETE FROM tax_gain_brackets WHERE tax_config_id = ?1")
+        .bind(tax_config_id)
+        .execute(&mut *conn)
+        .await?;
+    for (threshold, rate) in brackets {
+        sqlx::query(
+            "INSERT INTO tax_gain_brackets (tax_config_id, threshold, rate) VALUES (?1,?2,?3)",
+        )
+        .bind(tax_config_id)
+        .bind(threshold)
+        .bind(rate)
+        .execute(&mut *conn)
+        .await?;
+    }
+    Ok(())
+}
 
 /// Everything in `user_id`'s library, every list in id order.
 pub async fn load(db: &Db, user_id: &str) -> ApiResult<Library> {
@@ -73,34 +116,43 @@ pub async fn load_connection(conn: &mut SqliteConnection, user_id: &str) -> ApiR
     .await?;
 
     #[allow(clippy::type_complexity)]
-    let configs: Vec<(i64, String, Option<String>, f64, f64, f64, f64, f64)> = sqlx::query_as(
-        "SELECT id, name, description, state_rate, capital_gains_rate,
-                early_withdrawal_penalty_rate, standard_deduction, age_65_extra_deduction
-           FROM tax_configs WHERE user_id = ?1 ORDER BY id",
-    )
-    .bind(user_id)
-    .fetch_all(&mut *conn)
-    .await?;
+    let configs: Vec<(i64, String, Option<String>, f64, f64, f64, f64, Option<f64>)> =
+        sqlx::query_as(
+            "SELECT id, name, description, state_rate, early_withdrawal_penalty_rate,
+                    standard_deduction, age_65_extra_deduction, niit_threshold
+               FROM tax_configs WHERE user_id = ?1 ORDER BY id",
+        )
+        .bind(user_id)
+        .fetch_all(&mut *conn)
+        .await?;
     let mut tax_configs = Vec::with_capacity(configs.len());
-    for (id, name, description, state, gains, early, deduction, extra) in configs {
+    for (id, name, description, state, early, deduction, extra, niit) in configs {
         let brackets: Vec<(f64, f64)> = sqlx::query_as(
             "SELECT threshold, rate FROM tax_brackets WHERE tax_config_id = ?1 ORDER BY threshold",
         )
         .bind(id)
         .fetch_all(&mut *conn)
         .await?;
+        let gains = gain_brackets(&mut *conn, id).await?;
         tax_configs.push(LibraryTaxConfig {
             id,
             name,
             description,
             state_rate: state,
-            capital_gains_rate: gains,
             early_withdrawal_penalty_rate: early,
             standard_deduction: deduction,
             age_65_extra_deduction: extra,
+            niit_threshold: niit,
             federal_brackets: brackets
                 .into_iter()
                 .map(|(threshold, rate)| Bracket { threshold, rate })
+                .collect(),
+            capital_gains_brackets: gains
+                .into_iter()
+                .map(|b| Bracket {
+                    threshold: b.threshold,
+                    rate: b.rate,
+                })
                 .collect(),
         });
     }
@@ -197,8 +249,8 @@ pub async fn insert(
     for config in &library.tax_configs {
         let id: i64 = sqlx::query_scalar(
             "INSERT INTO tax_configs
-                (user_id, name, description, state_rate, capital_gains_rate,
-                 early_withdrawal_penalty_rate, standard_deduction, age_65_extra_deduction)
+                (user_id, name, description, state_rate, early_withdrawal_penalty_rate,
+                 standard_deduction, age_65_extra_deduction, niit_threshold)
              VALUES (?1,?2,?3,?4,?5,?6,?7,?8)
              RETURNING id",
         )
@@ -206,11 +258,21 @@ pub async fn insert(
         .bind(&config.name)
         .bind(&config.description)
         .bind(config.state_rate)
-        .bind(config.capital_gains_rate)
         .bind(config.early_withdrawal_penalty_rate)
         .bind(config.standard_deduction)
         .bind(config.age_65_extra_deduction)
+        .bind(config.niit_threshold)
         .fetch_one(&mut **tx)
+        .await?;
+        replace_gain_brackets(
+            tx,
+            id,
+            config
+                .capital_gains_brackets
+                .iter()
+                .map(|b| (b.threshold, b.rate))
+                .collect(),
+        )
         .await?;
         for bracket in &config.federal_brackets {
             sqlx::query(

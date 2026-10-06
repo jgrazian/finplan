@@ -14,6 +14,7 @@ use finplan_plan::graph::{
 };
 
 use crate::db::Db;
+use crate::db::library::{TAX_CONFIG_COLUMNS, gain_brackets};
 use crate::error::{ApiError, ApiResult};
 
 /// Load every row belonging to `scenario_id`, verifying it belongs to `user_id`.
@@ -158,15 +159,16 @@ pub async fn load_connection(
 
     let (tax_config, tax_brackets) = match scenario.tax_config_id {
         Some(id) => {
-            let cfg: Option<TaxConfigRow> = sqlx::query_as(
-                "SELECT id, name, state_rate, capital_gains_rate, early_withdrawal_penalty_rate,
-               standard_deduction, age_65_extra_deduction
-                   FROM tax_configs WHERE id = ?1 AND user_id = ?2",
-            )
+            let mut cfg: Option<TaxConfigRow> = sqlx::query_as(&format!(
+                "SELECT {TAX_CONFIG_COLUMNS} FROM tax_configs WHERE id = ?1 AND user_id = ?2"
+            ))
             .bind(id)
             .bind(user_id)
             .fetch_optional(&mut *db)
             .await?;
+            if let Some(cfg) = &mut cfg {
+                cfg.capital_gains_brackets = gain_brackets(&mut *db, id).await?;
+            }
 
             let brackets: Vec<TaxBracketRow> = sqlx::query_as(
                 "SELECT threshold, rate FROM tax_brackets
@@ -182,11 +184,9 @@ pub async fn load_connection(
     };
 
     let mut tax_configs = HashMap::new();
-    let config_rows: Vec<TaxConfigRow> = sqlx::query_as(
-        "SELECT id, name, state_rate, capital_gains_rate, early_withdrawal_penalty_rate,
-               standard_deduction, age_65_extra_deduction
-           FROM tax_configs WHERE user_id = ?1",
-    )
+    let config_rows: Vec<TaxConfigRow> = sqlx::query_as(&format!(
+        "SELECT {TAX_CONFIG_COLUMNS} FROM tax_configs WHERE user_id = ?1"
+    ))
     .bind(user_id)
     .fetch_all(&mut *db)
     .await?;
@@ -199,7 +199,8 @@ pub async fn load_connection(
         .await?
         .into_iter()
         .collect();
-    for config in config_rows {
+    for mut config in config_rows {
+        config.capital_gains_brackets = gain_brackets(&mut *db, config.id).await?;
         let brackets: Vec<TaxBracketRow> = sqlx::query_as(
             "SELECT threshold, rate FROM tax_brackets
               WHERE tax_config_id = ?1 ORDER BY threshold ASC",

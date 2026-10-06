@@ -298,19 +298,78 @@ pub struct WithdrawalItemRow {
     pub asset_id: Option<i64>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 #[cfg_attr(feature = "sqlx", derive(sqlx::FromRow))]
 pub struct TaxConfigRow {
     pub id: i64,
     pub name: String,
     pub state_rate: f64,
-    pub capital_gains_rate: f64,
     pub early_withdrawal_penalty_rate: f64,
+    pub standard_deduction: f64,
+    pub age_65_extra_deduction: f64,
+    /// Where the 3.8% net investment income tax starts; `None` leaves it out.
+    pub niit_threshold: Option<f64>,
+    /// The long-term capital gains schedule, thresholds ascending from 0.
+    /// Kept in its own table (`tax_gain_brackets`), which the loader reads
+    /// into this.
+    #[cfg_attr(feature = "sqlx", sqlx(skip))]
+    pub capital_gains_brackets: Vec<TaxBracketRow>,
+}
+
+/// [`TaxConfigRow`] as JSON has carried it: archives, run snapshots and the
+/// browser's stored plans written before gains had a schedule have a flat
+/// `capital_gains_rate` instead, read as that rate on every gain.
+#[derive(Deserialize)]
+struct TaxConfigRowJson {
+    id: i64,
+    name: String,
+    state_rate: f64,
+    early_withdrawal_penalty_rate: f64,
     /// Absent from archives written before the column existed.
     #[serde(default)]
-    pub standard_deduction: f64,
+    standard_deduction: f64,
     #[serde(default)]
-    pub age_65_extra_deduction: f64,
+    age_65_extra_deduction: f64,
+    #[serde(default)]
+    niit_threshold: Option<f64>,
+    #[serde(default)]
+    capital_gains_brackets: Vec<TaxBracketRow>,
+    #[serde(default)]
+    capital_gains_rate: Option<f64>,
+}
+
+impl<'de> Deserialize<'de> for TaxConfigRow {
+    fn deserialize<D: serde::Deserializer<'de>>(de: D) -> Result<Self, D::Error> {
+        let json = TaxConfigRowJson::deserialize(de)?;
+        Ok(Self {
+            id: json.id,
+            name: json.name,
+            state_rate: json.state_rate,
+            early_withdrawal_penalty_rate: json.early_withdrawal_penalty_rate,
+            standard_deduction: json.standard_deduction,
+            age_65_extra_deduction: json.age_65_extra_deduction,
+            niit_threshold: json.niit_threshold,
+            capital_gains_brackets: gains_schedule(
+                json.capital_gains_brackets,
+                json.capital_gains_rate,
+            ),
+        })
+    }
+}
+
+/// A gains schedule as stored JSON gives it: its brackets, or for JSON from
+/// before schedules, its flat `legacy_rate` as one bracket from 0.
+pub(crate) fn gains_schedule(
+    brackets: Vec<TaxBracketRow>,
+    legacy_rate: Option<f64>,
+) -> Vec<TaxBracketRow> {
+    match legacy_rate {
+        Some(rate) if brackets.is_empty() => vec![TaxBracketRow {
+            threshold: 0.0,
+            rate,
+        }],
+        _ => brackets,
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

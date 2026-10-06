@@ -18,8 +18,9 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::graph::{DistributionRow, ScenarioGraph};
+use crate::graph::{DistributionRow, ScenarioGraph, TaxBracketRow};
 use crate::library::Library;
+use crate::specs::taxes::Bracket;
 
 /// The library rows an imported plan can use as they are. Keys are the
 /// archive's ids; values are the library's.
@@ -106,20 +107,26 @@ pub fn adopt(graph: &ScenarioGraph, library: &Library) -> Adoption {
                 .iter()
                 .filter(|t| {
                     t.state_rate == tax.state_rate
-                        && t.capital_gains_rate == tax.capital_gains_rate
                         && t.early_withdrawal_penalty_rate == tax.early_withdrawal_penalty_rate
                         && t.standard_deduction == tax.standard_deduction
                         && t.age_65_extra_deduction == tax.age_65_extra_deduction
-                        && t.federal_brackets.len() == graph.tax_brackets.len()
-                        && t.federal_brackets
-                            .iter()
-                            .zip(&graph.tax_brackets)
-                            .all(|(a, b)| a.threshold == b.threshold && a.rate == b.rate)
+                        && t.niit_threshold == tax.niit_threshold
+                        && same_brackets(&t.federal_brackets, &graph.tax_brackets)
+                        && same_brackets(&t.capital_gains_brackets, &tax.capital_gains_brackets)
                 })
                 .map(|t| (t.id, t.name.as_str())),
         );
     }
     adoption
+}
+
+/// Whether a library's brackets are an archive's, bracket for bracket.
+fn same_brackets(library: &[Bracket], archived: &[TaxBracketRow]) -> bool {
+    library.len() == archived.len()
+        && library
+            .iter()
+            .zip(archived)
+            .all(|(a, b)| a.threshold == b.threshold && a.rate == b.rate)
 }
 
 /// The name an archived inflation profile goes by when the archive has none.

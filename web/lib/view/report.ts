@@ -13,6 +13,10 @@ const percent = (v: unknown) => v == null ? "Not measured — rerun" : `${(Numbe
 const words = (v: unknown) => String(v ?? "Not recorded").replace(/([a-z])([A-Z])/g, "$1 $2");
 const row = (key: unknown, value: unknown) => `<tr><th>${escapeReport(key)}</th><td>${escapeReport(value)}</td></tr>`;
 const table = (body: string) => `<table>${body}</table>`;
+// A run recorded before gains had a schedule carries a flat rate instead.
+const gainsSchedule = (tax: Row) => Array.isArray(tax.capital_gains_brackets)
+  ? (tax.capital_gains_brackets as Row[]).map(b => `${percent(b.rate)} from ${money(b.threshold)}`).join(" · ")
+  : `${percent(tax.capital_gains_rate)} on every gain`;
 function distribution(graph: Graph, id: unknown, depth = 0): string {
   const d = record(record(graph.distributions)[String(id)]);
   if (depth > 8) return "Nested distribution";
@@ -47,7 +51,7 @@ function assumptions(graph: Graph): string {
     <h3>Opening accounts</h3>${accounts ? table(accounts) : "<p>No accounts recorded.</p>"}
     <h3>Assets and return assumptions</h3>${assetTable ? table(assetTable) : ""}${profiles ? table(profiles) : "<p>No return profiles recorded.</p>"}
     <h3>Inflation</h3><p>${escapeReport(graph.inflation_profile_name ?? "No inflation profile")} · ${escapeReport(graph.inflation_distribution_id == null ? "No inflation modeled" : distribution(graph, graph.inflation_distribution_id))}</p>
-    <h3>Tax assumptions</h3>${graph.tax_config ? table(row("Profile and vintage label", tax.name) + row("State rate", percent(tax.state_rate)) + row("Capital gains rate", percent(tax.capital_gains_rate)) + row("Early withdrawal penalty", percent(tax.early_withdrawal_penalty_rate)) + row("Standard deduction", money(tax.standard_deduction)) + row("Extra deduction from 65", money(tax.age_65_extra_deduction))) : "<p>No tax profile recorded.</p>"}
+    <h3>Tax assumptions</h3>${graph.tax_config ? table(row("Profile and vintage label", tax.name) + row("State rate", percent(tax.state_rate)) + row("Long-term capital gains", gainsSchedule(tax)) + row("Net investment income tax", tax.niit_threshold == null ? "Not modeled" : `3.8% over ${money(tax.niit_threshold)}`) + row("Early withdrawal penalty", percent(tax.early_withdrawal_penalty_rate)) + row("Standard deduction", money(tax.standard_deduction)) + row("Extra deduction from 65", money(tax.age_65_extra_deduction))) : "<p>No tax profile recorded.</p>"}
     ${rows(graph.tax_brackets).length ? `<p>Ordinary-income brackets: ${escapeReport(rows(graph.tax_brackets).map(b => `${money(b.threshold)} at ${percent(b.rate)}`).join("; "))}.</p>` : ""}
     <h3>Income, spending and life events</h3>${eventTable ? table(eventTable) : "<p>No events recorded. Missing spending can overstate cash funding.</p>"}
     <p>This summary describes the saved assumptions; download the saved inputs in FinPlan to inspect complete funding rules and nested event schedules.</p>`;

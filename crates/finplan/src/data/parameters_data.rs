@@ -1,4 +1,4 @@
-use finplan_core::model::{InflationProfile, TaxConfig};
+use finplan_core::model::{InflationProfile, TaxBracket, TaxConfig};
 use serde::{Deserialize, Serialize};
 
 /// Returns modeling mode for the simulation
@@ -114,11 +114,9 @@ pub struct TaxConfigData {
     #[serde(default = "default_state_rate")]
     pub state_rate: f64,
 
-    /// Long-term capital gains rate (e.g., 0.15 for 15%)
-    #[serde(default = "default_cap_gains_rate")]
-    pub capital_gains_rate: f64,
-
-    /// Federal tax brackets preset
+    /// Federal tax brackets preset; its long-term capital gains schedule
+    /// goes with it. (Files from before schedules carry a flat
+    /// `capital_gains_rate`, which is ignored.)
     #[serde(default)]
     pub federal_brackets: FederalBracketsPreset,
 }
@@ -127,15 +125,10 @@ fn default_state_rate() -> f64 {
     0.05
 }
 
-fn default_cap_gains_rate() -> f64 {
-    0.15
-}
-
 impl Default for TaxConfigData {
     fn default() -> Self {
         Self {
             state_rate: default_state_rate(),
-            capital_gains_rate: default_cap_gains_rate(),
             federal_brackets: FederalBracketsPreset::default(),
         }
     }
@@ -151,7 +144,23 @@ pub enum FederalBracketsPreset {
     /// 2024 Married filing jointly brackets
     MarriedJoint2024,
     /// Custom brackets
-    Custom { brackets: Vec<TaxBracketData> },
+    Custom {
+        brackets: Vec<TaxBracketData>,
+        /// Long-term capital gains brackets over taxable income; the 2024
+        /// single schedule when the file has none.
+        #[serde(default = "single_2024_gains")]
+        capital_gains_brackets: Vec<TaxBracketData>,
+    },
+}
+
+fn single_2024_gains() -> Vec<TaxBracketData> {
+    TaxConfig::us_2024_single_gains_brackets()
+        .into_iter()
+        .map(|b| TaxBracketData {
+            threshold: b.threshold,
+            rate: b.rate,
+        })
+        .collect()
 }
 
 impl FederalBracketsPreset {
@@ -163,6 +172,30 @@ impl FederalBracketsPreset {
             Self::Single2024 => (14_600.0, 1_950.0),
             Self::MarriedJoint2024 => (29_200.0, 2.0 * 1_550.0),
             Self::Custom { .. } => (0.0, 0.0),
+        }
+    }
+
+    /// The long-term capital gains schedule that goes with each preset's
+    /// brackets.
+    pub fn capital_gains_brackets(&self) -> Vec<TaxBracket> {
+        let table = |rows: &[(f64, f64)]| {
+            rows.iter()
+                .map(|&(threshold, rate)| TaxBracket { threshold, rate })
+                .collect()
+        };
+        match self {
+            Self::Single2024 => TaxConfig::us_2024_single_gains_brackets(),
+            Self::MarriedJoint2024 => table(&[(0.0, 0.0), (94_050.0, 0.15), (583_750.0, 0.20)]),
+            Self::Custom {
+                capital_gains_brackets,
+                ..
+            } => capital_gains_brackets
+                .iter()
+                .map(|b| TaxBracket {
+                    threshold: b.threshold,
+                    rate: b.rate,
+                })
+                .collect(),
         }
     }
 }
@@ -211,7 +244,7 @@ impl TaxConfigData {
                     },
                 ]
             }
-            FederalBracketsPreset::Custom { brackets } => brackets
+            FederalBracketsPreset::Custom { brackets, .. } => brackets
                 .iter()
                 .map(|b| finplan_core::model::TaxBracket {
                     threshold: b.threshold,
@@ -223,7 +256,8 @@ impl TaxConfigData {
         TaxConfig {
             federal_brackets,
             state_rate: self.state_rate,
-            capital_gains_rate: self.capital_gains_rate,
+            capital_gains_brackets: self.federal_brackets.capital_gains_brackets(),
+            niit_threshold: None,
             early_withdrawal_penalty_rate: 0.10,
             standard_deduction,
             age_65_extra_deduction,
@@ -261,7 +295,6 @@ mod tests {
             },
             tax_config: TaxConfigData {
                 state_rate: 0.05,
-                capital_gains_rate: 0.15,
                 federal_brackets: FederalBracketsPreset::Single2024,
             },
             returns_mode: ReturnsMode::Parametric,

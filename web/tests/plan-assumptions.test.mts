@@ -23,8 +23,13 @@ function config(over: Partial<TaxConfig>): TaxConfig {
     name: "US Federal 2024 (single)",
     description: null,
     state_rate: 0.05,
-    capital_gains_rate: 0.15,
     early_withdrawal_penalty_rate: 0.1,
+    niit_threshold: null,
+    capital_gains_brackets: [
+      { threshold: 0, rate: 0 },
+      { threshold: 47_025, rate: 0.15 },
+      { threshold: 518_900, rate: 0.2 },
+    ],
     standard_deduction: 0,
     age_65_extra_deduction: 0,
     federal_brackets: [
@@ -76,5 +81,5 @@ test("a tax configuration with no description says what it charges instead", () 
   assert.equal(described.note, "2024 brackets, 5% state");
 
   const [bare] = toTaxChoices([config({})]);
-  assert.equal(bare.note, "15% long-term gains, 10% early-withdrawal penalty.");
+  assert.equal(bare.note, "0% / 15% / 20% long-term gains, 10% early-withdrawal penalty.");
 });

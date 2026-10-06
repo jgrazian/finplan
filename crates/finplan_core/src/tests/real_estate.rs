@@ -7,7 +7,8 @@ use crate::config::SimulationConfig;
 use crate::model::{
     Account, AccountFlavor, AccountId, AssetId, Cash, CashFlowKind, Event, EventEffect, EventId,
     EventTrigger, Financing, FixedAsset, InflationProfile, LoanDetail, Repayment, RepeatInterval,
-    ReturnProfile, ReturnProfileId, StateEvent, TaxConfig, TransferAmount, amortized_payment,
+    ReturnProfile, ReturnProfileId, StateEvent, TaxBracket, TaxConfig, TransferAmount,
+    amortized_payment,
 };
 use crate::simulation::simulate;
 
@@ -200,8 +201,12 @@ fn sell_property_pays_off_loan_and_taxes_gain() {
     let opening = 400_000.0;
     let growth = 0.05;
     let sold = jiff::civil::date(2030, 1, 1);
+    // A flat 15% gains schedule, so the tax is a plain fraction of the gain.
     let tax_config = TaxConfig {
-        capital_gains_rate: 0.15,
+        capital_gains_brackets: vec![TaxBracket {
+            threshold: 0.0,
+            rate: 0.15,
+        }],
         state_rate: 0.05,
         ..TaxConfig::default()
     };

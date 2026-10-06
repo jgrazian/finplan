@@ -965,7 +965,8 @@ fn a_scenario_switches_onto_a_tax_config_the_batch_creates() {
         {"op": "replace", "target": "scenario", "path": "/tax_config_id",
          "expect": 1, "value": {"$new": "single-co"}},
         {"op": "add", "target": {"new_tax_config": "single-co"}, "path": "", "value": {
-            "name": "Single, Colorado", "state_rate": 0.044, "capital_gains_rate": 0.15,
+            "name": "Single, Colorado", "state_rate": 0.044,
+            "capital_gains_brackets": [{"threshold": 0.0, "rate": 0.0}, {"threshold": 47025.0, "rate": 0.15}],
             "early_withdrawal_penalty_rate": 0.1,
             "federal_brackets": [{"threshold": 0.0, "rate": 0.1}, {"threshold": 11000.0, "rate": 0.12}]}},
     ]);
@@ -982,7 +983,7 @@ fn a_scenario_switches_onto_a_tax_config_the_batch_creates() {
     assert!(
         diff.iter()
             .any(|l| l.label == "Assumptions › + Single, Colorado"
-                && l.to.as_deref() == Some("state 4.4% · capital gains 15% · 2 brackets")),
+                && l.to.as_deref() == Some("state 4.4% · capital gains 0%–15% · 2 brackets")),
         "{diff:?}"
     );
     assert!(
@@ -1043,10 +1044,14 @@ fn a_scenario_switches_onto_a_library_row_the_caller_loaded() {
                 id: 9,
                 name: "Flat".into(),
                 state_rate: 0.0,
-                capital_gains_rate: 0.2,
                 early_withdrawal_penalty_rate: 0.1,
                 standard_deduction: 0.0,
                 age_65_extra_deduction: 0.0,
+                niit_threshold: None,
+                capital_gains_brackets: vec![crate::graph::TaxBracketRow {
+                    threshold: 0.0,
+                    rate: 0.2,
+                }],
             },
             brackets: vec![crate::graph::TaxBracketRow {
                 threshold: 0.0,

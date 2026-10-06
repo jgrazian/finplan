@@ -237,16 +237,28 @@ fn distribution(value: &Value) -> String {
 }
 
 /// A new tax config, in a line:
-/// `state 5% · capital gains 15% · 7 brackets · $14,600 deduction`.
+/// `state 5% · capital gains 0–20% · 7 brackets · $14,600 deduction`.
 fn new_tax_config(value: &Value) -> String {
     let rate = |key: &str| percent(field(value, key).as_f64().unwrap_or_default());
     let brackets = field(value, "federal_brackets")
         .as_array()
         .map_or(0, Vec::len);
+    let gains: Vec<f64> = field(value, "capital_gains_brackets")
+        .as_array()
+        .map(|b| b.iter().filter_map(|b| b["rate"].as_f64()).collect())
+        .unwrap_or_default();
+    let low = gains.iter().copied().fold(f64::INFINITY, f64::min);
+    let high = gains.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    let gains = if gains.is_empty() {
+        "none".to_string()
+    } else if low == high {
+        percent(low)
+    } else {
+        format!("{}–{}", percent(low), percent(high))
+    };
     let mut line = format!(
-        "state {} · capital gains {} · {brackets} brackets",
+        "state {} · capital gains {gains} · {brackets} brackets",
         rate("state_rate"),
-        rate("capital_gains_rate")
     );
     let deduction = field(value, "standard_deduction")
         .as_f64()

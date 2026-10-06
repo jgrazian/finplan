@@ -6,6 +6,7 @@ use crate::model::{
     ReturnProfileId, RmdTable, SimulationWarning, StateEvent, TaxBracket, TaxConfig, TaxSummary,
     WealthSnapshot,
 };
+use crate::taxes::YtdIncome;
 use rand::SeedableRng;
 use rustc_hash::FxHashMap;
 use std::cell::RefCell;
@@ -307,14 +308,34 @@ pub struct SimTaxState {
     pub ytd_tax: TaxSummary,
     /// Yearly tax summaries
     pub yearly_taxes: Vec<TaxSummary>,
-    /// Tax configuration for the current tax year. Its federal brackets are
-    /// rebuilt at every year rollover: the year's standard deduction folded in
-    /// as a 0% band, then every threshold indexed to inflation.
+    /// Tax configuration for the current tax year. Its federal and capital
+    /// gains brackets are rebuilt at every year rollover: the year's standard
+    /// deduction folded in as a 0% band, then every threshold indexed to
+    /// inflation.
     pub config: TaxConfig,
     /// The configured federal brackets, in simulation-start dollars
     pub base_federal_brackets: Vec<TaxBracket>,
+    /// The configured capital gains brackets, in simulation-start dollars
+    pub base_gains_brackets: Vec<TaxBracket>,
+    /// Short-term gains realized this year. `ytd_tax.capital_gains` reports
+    /// them with the long-term ones; for brackets they are ordinary income.
+    pub ytd_short_term_gains: f64,
+    /// Long-term gains realized this year
+    pub ytd_long_term_gains: f64,
     /// First tax year the filer counts as 65, if a birth date was given
     pub age_65_tax_year: Option<i16>,
+}
+
+impl SimTaxState {
+    /// The income this tax year has applied so far.
+    #[must_use]
+    pub fn ytd_income(&self) -> YtdIncome {
+        YtdIncome {
+            ordinary: self.ytd_tax.ordinary_income + self.ytd_short_term_gains,
+            short_term_gains: self.ytd_short_term_gains,
+            long_term_gains: self.ytd_long_term_gains,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -571,6 +592,9 @@ impl SimulationState {
                 yearly_taxes: Vec::new(),
                 config: params.tax_config.clone(),
                 base_federal_brackets: params.tax_config.federal_brackets.clone(),
+                base_gains_brackets: params.tax_config.capital_gains_brackets.clone(),
+                ytd_short_term_gains: 0.0,
+                ytd_long_term_gains: 0.0,
                 // The IRS counts you 65 the day before your 65th birthday, so a
                 // January 1st birthday reaches it in the prior tax year.
                 age_65_tax_year: params
@@ -745,11 +769,14 @@ impl SimulationState {
         }
     }
 
-    /// Rebuild the federal brackets for `tax_year`: fold in that year's
-    /// standard deduction (plus the extra once the filer is 65), then scale
-    /// every threshold by this path's cumulative inflation, as the IRS indexes
-    /// both each year. The factor is the inflation through the end of the
-    /// prior year, so the first tax year keeps the configured amounts.
+    /// Rebuild the federal and capital gains brackets for `tax_year`: fold in
+    /// that year's standard deduction (plus the extra once the filer is 65),
+    /// then scale every threshold by this path's cumulative inflation, as the
+    /// IRS indexes both each year. The factor is the inflation through the
+    /// end of the prior year, so the first tax year keeps the configured
+    /// amounts. Gains brackets are over taxable income, so the deduction
+    /// moves them too: what of it ordinary income leaves unused shelters
+    /// gains.
     pub(crate) fn index_federal_brackets(&mut self, tax_year: i16) {
         let years_elapsed = (tax_year - self.timeline.start_date.year()).max(0) as usize;
         let factor = self
@@ -767,6 +794,8 @@ impl SimulationState {
         }
         config.federal_brackets =
             crate::taxes::indexed_brackets(&self.taxes.base_federal_brackets, deduction, factor);
+        config.capital_gains_brackets =
+            crate::taxes::indexed_brackets(&self.taxes.base_gains_brackets, deduction, factor);
     }
 
     /// Check if we've crossed into a new year and finalize previous year's taxes
@@ -778,6 +807,8 @@ impl SimulationState {
                 year: current_year,
                 ..Default::default()
             };
+            self.taxes.ytd_short_term_gains = 0.0;
+            self.taxes.ytd_long_term_gains = 0.0;
             self.index_federal_brackets(current_year);
 
             // Reset YTD flow accumulators (for flow limits)

@@ -14,6 +14,7 @@ use ts_rs::TS;
 
 use crate::{
     auth::session::CurrentUser,
+    db::library::replace_gain_brackets,
     error::{ApiError, ApiResult},
     state::AppState,
 };
@@ -23,7 +24,6 @@ use finplan_plan::graph::{DistributionRow, ScenarioGraph};
 use finplan_plan::library::{
     Library, LibraryInflationProfile, LibraryReturnProfile, LibraryTaxConfig,
 };
-use finplan_plan::specs::taxes::Bracket;
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -369,8 +369,17 @@ pub(crate) async fn restore_graph(
                 &suffix,
                 library.tax_configs.iter().map(|t| t.name.as_str()),
             );
-            let id:i64 = sqlx::query_scalar("INSERT INTO tax_configs(user_id,name,state_rate,capital_gains_rate,early_withdrawal_penalty_rate,standard_deduction,age_65_extra_deduction) VALUES(?,?,?,?,?,?,?) RETURNING id")
-                .bind(user).bind(&name).bind(tax.state_rate).bind(tax.capital_gains_rate).bind(tax.early_withdrawal_penalty_rate).bind(tax.standard_deduction).bind(tax.age_65_extra_deduction).fetch_one(&mut **tx).await?;
+            let id:i64 = sqlx::query_scalar("INSERT INTO tax_configs(user_id,name,state_rate,early_withdrawal_penalty_rate,standard_deduction,age_65_extra_deduction,niit_threshold) VALUES(?,?,?,?,?,?,?) RETURNING id")
+                .bind(user).bind(&name).bind(tax.state_rate).bind(tax.early_withdrawal_penalty_rate).bind(tax.standard_deduction).bind(tax.age_65_extra_deduction).bind(tax.niit_threshold).fetch_one(&mut **tx).await?;
+            replace_gain_brackets(
+                tx,
+                id,
+                tax.capital_gains_brackets
+                    .iter()
+                    .map(|b| (b.threshold, b.rate))
+                    .collect(),
+            )
+            .await?;
             for bracket in &graph.tax_brackets {
                 sqlx::query("INSERT INTO tax_brackets(tax_config_id,threshold,rate) VALUES(?,?,?)")
                     .bind(id)
@@ -379,24 +388,12 @@ pub(crate) async fn restore_graph(
                     .execute(&mut **tx)
                     .await?;
             }
-            library.tax_configs.push(LibraryTaxConfig {
+            library.tax_configs.push(LibraryTaxConfig::from_plan(
                 id,
                 name,
-                description: None,
-                state_rate: tax.state_rate,
-                capital_gains_rate: tax.capital_gains_rate,
-                early_withdrawal_penalty_rate: tax.early_withdrawal_penalty_rate,
-                standard_deduction: tax.standard_deduction,
-                age_65_extra_deduction: tax.age_65_extra_deduction,
-                federal_brackets: graph
-                    .tax_brackets
-                    .iter()
-                    .map(|b| Bracket {
-                        threshold: b.threshold,
-                        rate: b.rate,
-                    })
-                    .collect(),
-            });
+                tax,
+                &graph.tax_brackets,
+            ));
             Some(id)
         }
         None => None,

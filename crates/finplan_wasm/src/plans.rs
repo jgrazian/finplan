@@ -220,7 +220,6 @@ pub fn restore_plan_json(
 ) -> EngineResult<String> {
     use finplan_plan::adopt::{IMPORTED_INFLATION, adopt, import_name};
     use finplan_plan::library::{LibraryInflationProfile, LibraryReturnProfile, LibraryTaxConfig};
-    use finplan_plan::specs::taxes::Bracket;
     use std::collections::HashMap;
 
     let mut library: Library = parse("library", library)?;
@@ -350,24 +349,12 @@ pub fn restore_plan_json(
                 suffix,
                 library.tax_configs.iter().map(|t| t.name.as_str()),
             );
-            library.tax_configs.push(LibraryTaxConfig {
+            library.tax_configs.push(LibraryTaxConfig::from_plan(
                 id,
                 name,
-                description: None,
-                state_rate: tax.state_rate,
-                capital_gains_rate: tax.capital_gains_rate,
-                early_withdrawal_penalty_rate: tax.early_withdrawal_penalty_rate,
-                standard_deduction: tax.standard_deduction,
-                age_65_extra_deduction: tax.age_65_extra_deduction,
-                federal_brackets: graph
-                    .tax_brackets
-                    .iter()
-                    .map(|b| Bracket {
-                        threshold: b.threshold,
-                        rate: b.rate,
-                    })
-                    .collect(),
-            });
+                tax,
+                &graph.tax_brackets,
+            ));
             Some(id)
         }
         None => None,

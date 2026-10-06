@@ -7,8 +7,8 @@ use crate::error::{
 };
 use crate::expression::EvaluationContext;
 use crate::liquidation::{
-    CashWithdrawalParams, LiquidationParams, get_current_price, liquidate_investment_into,
-    withdraw_cash_into,
+    CashWithdrawalParams, LiquidationParams, get_current_price, gross_for_net,
+    liquidate_investment_into, withdraw_cash_into,
 };
 use crate::model::{
     Account, AccountFlavor, AccountId, AmountMode, AssetCoord, AssetId, CashFlowKind, EventEffect,
@@ -16,7 +16,31 @@ use crate::model::{
     TransferAmount, TransferEndpoint, WithdrawalOrder, WithdrawalSources,
 };
 use crate::simulation_state::SimulationState;
-use crate::taxes::{calculate_federal_marginal_tax, calculate_gross_from_net};
+use crate::taxes::{
+    YtdIncome, calculate_federal_marginal_tax, calculate_gross_from_net,
+    calculate_realized_gains_tax,
+};
+
+/// The income the tax year has seen as of this evaluation: what `state` has
+/// applied, plus the tax events already in `out`. An effect's events apply
+/// only once its evaluation ends, so a sale reads the sales before it in the
+/// same effect (other assets, other accounts of a sweep) from `out`.
+pub(crate) fn ytd_income(state: &SimulationState, out: &[EvalEvent]) -> YtdIncome {
+    out.iter()
+        .fold(state.taxes.ytd_income(), |ytd, event| match event {
+            EvalEvent::IncomeTax {
+                gross_income_amount,
+                ..
+            } => ytd.with_ordinary(*gross_income_amount),
+            EvalEvent::ShortTermCapitalGainsTax {
+                gross_gain_amount, ..
+            } => ytd.with_gains(*gross_gain_amount, 0.0),
+            EvalEvent::LongTermCapitalGainsTax {
+                gross_gain_amount, ..
+            } => ytd.with_gains(0.0, *gross_gain_amount),
+            _ => ytd,
+        })
+}
 
 /// Evaluate a TransferAmount expression to get the actual dollar amount
 fn evaluate_transfer_amount(
@@ -461,7 +485,7 @@ pub fn evaluate_effect_into(
                     Ok(())
                 }
                 (IncomeType::Taxable, AmountMode::Gross) => {
-                    let ytd_income = state.taxes.ytd_tax.ordinary_income;
+                    let ytd_income = ytd_income(state, out).ordinary;
                     let brackets = &state.taxes.config.federal_brackets;
                     let state_rate = state.taxes.config.state_rate;
 
@@ -484,7 +508,7 @@ pub fn evaluate_effect_into(
                     Ok(())
                 }
                 (IncomeType::Taxable, AmountMode::Net) => {
-                    let ytd_income = state.taxes.ytd_tax.ordinary_income;
+                    let ytd_income = ytd_income(state, out).ordinary;
                     let brackets = &state.taxes.config.federal_brackets;
                     let state_rate = state.taxes.config.state_rate;
 
@@ -662,63 +686,41 @@ pub fn evaluate_effect_into(
                     continue;
                 };
 
-                // Single pass over positions to get both units and cost basis
-                let (total_units, total_basis): (f64, f64) = investment
+                let total_units: f64 = investment
                     .positions
                     .iter()
                     .filter(|lot| lot.asset_id == asset_id)
-                    .fold((0.0, 0.0), |(u, b), lot| {
-                        (u + lot.units, b + lot.cost_basis)
-                    });
-
+                    .map(|lot| lot.units)
+                    .sum();
                 let available = total_units * current_price;
 
                 if available < 0.01 {
                     continue;
                 }
 
-                // Calculate gross amount to liquidate
-                let take_gross = match amount_mode {
+                // Each asset's sale is taxed after the ones before it.
+                let mut params = LiquidationParams {
+                    investment,
+                    asset_coord,
+                    to_account: *from, // Cash stays in source account
+                    amount: 0.0,
+                    current_price,
+                    lot_method: *lot_method,
+                    current_date: state.timeline.current_date,
+                    tax_config: &state.taxes.config,
+                    ytd: ytd_income(state, out),
+                    early_withdrawal_penalty_applies: state
+                        .timeline
+                        .is_below_early_withdrawal_age(),
+                    conversion_tranches: state.conversion_tranches(*from),
+                };
+                params.amount = match amount_mode {
                     AmountMode::Gross => remaining.min(available),
-                    AmountMode::Net => {
-                        // For net mode, estimate gross needed based on actual position data
-                        let avg_cost_per_unit = if total_units > 0.0 {
-                            total_basis / total_units
-                        } else {
-                            current_price
-                        };
-
-                        let gain_ratio =
-                            ((current_price - avg_cost_per_unit) / current_price).max(0.0);
-                        let estimated_tax_rate =
-                            state.taxes.config.capital_gains_rate + state.taxes.config.state_rate;
-                        let effective_tax_rate = gain_ratio * estimated_tax_rate;
-                        let gross_multiplier = 1.0 / (1.0 - effective_tax_rate).max(0.5);
-
-                        let estimated_gross = remaining * gross_multiplier;
-                        estimated_gross.min(available)
-                    }
+                    AmountMode::Net => gross_for_net(&params, remaining),
                 };
 
                 // Liquidate into the source account's cash balance
-                let result = liquidate_investment_into(
-                    &LiquidationParams {
-                        investment,
-                        asset_coord,
-                        to_account: *from, // Cash stays in source account
-                        amount: take_gross,
-                        current_price,
-                        lot_method: *lot_method,
-                        current_date: state.timeline.current_date,
-                        tax_config: &state.taxes.config,
-                        ytd_ordinary_income: state.taxes.ytd_tax.ordinary_income,
-                        early_withdrawal_penalty_applies: state
-                            .timeline
-                            .is_below_early_withdrawal_age(),
-                        conversion_tranches: state.conversion_tranches(*from),
-                    },
-                    out, // Push effects directly to scratch buffer
-                );
+                let result = liquidate_investment_into(&params, out);
 
                 remaining -= match amount_mode {
                     AmountMode::Gross => result.gross_amount,
@@ -810,9 +812,6 @@ pub fn evaluate_effect_into(
                 .evaluate(&context)
                 .map_err(TransferEvaluationError::Expression)?;
 
-            // Ordinary income this sweep has added so far: each sale reads the
-            // year-to-date total from `state`, which only moves once applied.
-            let mut added_income = 0.0;
             let requested = remaining;
 
             // Cash each account has given up to this sweep so far. A ProRata
@@ -836,7 +835,7 @@ pub fn evaluate_effect_into(
                         *amount_mode,
                     ),
                     Some(ceiling) => {
-                        let ytd = state.taxes.ytd_tax.ordinary_income + added_income;
+                        let ytd = ytd_income(state, out).ordinary;
                         let room = ceiling - ytd;
                         if room < 0.01 {
                             continue;
@@ -875,7 +874,7 @@ pub fn evaluate_effect_into(
                             to_account: from_account, // Like a sale's proceeds
                             amount_mode: step_mode,
                             tax_config: &state.taxes.config,
-                            ytd_ordinary_income: state.taxes.ytd_tax.ordinary_income + added_income,
+                            ytd_ordinary_income: ytd_income(state, out).ordinary,
                             early_withdrawal_penalty_applies: state
                                 .timeline
                                 .is_below_early_withdrawal_age(),
@@ -909,16 +908,6 @@ pub fn evaluate_effect_into(
                     lot_method: *lot_method,
                 };
                 evaluate_effect_into(&sale, state, out)?;
-                added_income += out[before_len..]
-                    .iter()
-                    .filter_map(|ev| match ev {
-                        EvalEvent::IncomeTax {
-                            gross_income_amount,
-                            ..
-                        } => Some(*gross_income_amount),
-                        _ => None,
-                    })
-                    .sum::<f64>();
 
                 // Sum up what was liquidated from this account (only new effects)
                 let liquidated_from_account: f64 = out[before_len..]
@@ -1209,14 +1198,17 @@ pub fn evaluate_effect_into(
             let gain = (proceeds - basis - gain_exclusion.max(0.0)).max(0.0);
             let mut tax = 0.0;
             if gain > 0.005 {
-                let config = &state.taxes.config;
-                let federal_tax = gain * config.capital_gains_rate;
-                let state_tax = gain * config.state_rate;
-                tax = federal_tax + state_tax;
+                let realized = calculate_realized_gains_tax(
+                    0.0,
+                    gain,
+                    &state.taxes.config,
+                    ytd_income(state, out),
+                );
+                tax = realized.total_tax;
                 out.push(EvalEvent::LongTermCapitalGainsTax {
                     gross_gain_amount: gain,
-                    federal_tax,
-                    state_tax,
+                    federal_tax: realized.federal_tax,
+                    state_tax: realized.state_tax,
                 });
             }
 
@@ -1376,7 +1368,7 @@ pub fn evaluate_effect_into(
             let gross_fmv = num_units * current_price;
 
             // 4. Calculate income tax on the full FMV (ordinary income)
-            let ytd_income = state.taxes.ytd_tax.ordinary_income;
+            let ytd_income = ytd_income(state, out).ordinary;
             let brackets = &state.taxes.config.federal_brackets;
             let state_rate = state.taxes.config.state_rate;
 

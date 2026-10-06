@@ -8,14 +8,15 @@ use axum::{Json, Router};
 use crate::auth::activity::{ActivityFields, Submitted};
 use crate::auth::session::CurrentUser;
 use crate::db::Db;
+use crate::db::library::{gain_brackets, replace_gain_brackets};
 use crate::error::{ApiError, ApiResult, on_unique_violation};
 use crate::observability::{EventFields, Operation, Resource};
 use crate::state::AppState;
 
 use finplan_plan::specs::taxes::NAME_TAKEN;
 use finplan_plan::specs::taxes::{
-    Bracket, CreateTaxConfig, TaxConfig, UpdateTaxConfig, checked, validate_brackets,
-    validate_deductions,
+    Bracket, CAPITAL_GAINS, CreateTaxConfig, FEDERAL, TaxConfig, UpdateTaxConfig, checked,
+    validate_brackets, validate_deductions,
 };
 
 pub fn router() -> Router<AppState> {
@@ -29,25 +30,26 @@ pub fn router() -> Router<AppState> {
 
 async fn load(db: &Db, id: i64, user_id: &str) -> ApiResult<TaxConfig> {
     #[allow(clippy::type_complexity)]
-    let row: Option<(i64, String, Option<String>, f64, f64, f64, f64, f64)> = sqlx::query_as(
-        "SELECT id, name, description, state_rate, capital_gains_rate,
-                early_withdrawal_penalty_rate, standard_deduction, age_65_extra_deduction
-           FROM tax_configs WHERE id = ?1 AND user_id = ?2",
-    )
-    .bind(id)
-    .bind(user_id)
-    .fetch_optional(db)
-    .await?;
+    let row: Option<(i64, String, Option<String>, f64, f64, f64, f64, Option<f64>)> =
+        sqlx::query_as(
+            "SELECT id, name, description, state_rate, early_withdrawal_penalty_rate,
+                    standard_deduction, age_65_extra_deduction, niit_threshold
+               FROM tax_configs WHERE id = ?1 AND user_id = ?2",
+        )
+        .bind(id)
+        .bind(user_id)
+        .fetch_optional(db)
+        .await?;
 
     let (
         id,
         name,
         description,
         state_rate,
-        capital_gains_rate,
         early,
         standard_deduction,
         age_65_extra_deduction,
+        niit_threshold,
     ) = row.ok_or(ApiError::NotFound("tax config"))?;
 
     let brackets: Vec<(f64, f64)> = sqlx::query_as(
@@ -56,19 +58,27 @@ async fn load(db: &Db, id: i64, user_id: &str) -> ApiResult<TaxConfig> {
     .bind(id)
     .fetch_all(db)
     .await?;
+    let gains = gain_brackets(db, id).await?;
 
     Ok(TaxConfig {
         id,
         name,
         description,
         state_rate,
-        capital_gains_rate,
         early_withdrawal_penalty_rate: early,
         standard_deduction,
         age_65_extra_deduction,
+        niit_threshold,
         federal_brackets: brackets
             .into_iter()
             .map(|(threshold, rate)| Bracket { threshold, rate })
+            .collect(),
+        capital_gains_brackets: gains
+            .into_iter()
+            .map(|b| Bracket {
+                threshold: b.threshold,
+                rate: b.rate,
+            })
             .collect(),
     })
 }
@@ -129,24 +139,30 @@ pub(crate) async fn create_in(
     user_id: &str,
     body: &CreateTaxConfig,
 ) -> ApiResult<i64> {
-    let brackets = checked(body)?;
+    let (brackets, gains) = checked(body)?;
     let id: i64 = sqlx::query_scalar(
         "INSERT INTO tax_configs
-            (user_id, name, description, state_rate, capital_gains_rate,
-             early_withdrawal_penalty_rate, standard_deduction, age_65_extra_deduction)
+            (user_id, name, description, state_rate, early_withdrawal_penalty_rate,
+             standard_deduction, age_65_extra_deduction, niit_threshold)
          VALUES (?1,?2,?3,?4,?5,?6,?7,?8) RETURNING id",
     )
     .bind(user_id)
     .bind(body.name.trim())
     .bind(&body.description)
     .bind(body.state_rate)
-    .bind(body.capital_gains_rate)
     .bind(body.early_withdrawal_penalty_rate)
     .bind(body.standard_deduction)
     .bind(body.age_65_extra_deduction)
+    .bind(body.niit_threshold)
     .fetch_one(&mut **tx)
     .await
     .map_err(|e| on_unique_violation(e, NAME_TAKEN))?;
+    replace_gain_brackets(
+        tx,
+        id,
+        gains.iter().map(|b| (b.threshold, b.rate)).collect(),
+    )
+    .await?;
 
     for bracket in &brackets {
         sqlx::query("INSERT INTO tax_brackets (tax_config_id, threshold, rate) VALUES (?1,?2,?3)")
@@ -194,12 +210,18 @@ pub(crate) async fn update_in(
     validate_deductions([
         ("standard_deduction", body.standard_deduction),
         ("age_65_extra_deduction", body.age_65_extra_deduction),
+        ("niit_threshold", body.niit_threshold.flatten()),
     ])?;
 
     let brackets = body
         .federal_brackets
         .as_deref()
-        .map(validate_brackets)
+        .map(|b| validate_brackets(FEDERAL, b))
+        .transpose()?;
+    let gains = body
+        .capital_gains_brackets
+        .as_deref()
+        .map(|b| validate_brackets(CAPITAL_GAINS, b))
         .transpose()?;
 
     let mut tx = db.begin().await?;
@@ -209,10 +231,10 @@ pub(crate) async fn update_in(
             name                          = COALESCE(?3, name),
             description                   = COALESCE(?4, description),
             state_rate                    = COALESCE(?5, state_rate),
-            capital_gains_rate            = COALESCE(?6, capital_gains_rate),
-            early_withdrawal_penalty_rate = COALESCE(?7, early_withdrawal_penalty_rate),
-            standard_deduction            = COALESCE(?8, standard_deduction),
-            age_65_extra_deduction        = COALESCE(?9, age_65_extra_deduction),
+            early_withdrawal_penalty_rate = COALESCE(?6, early_withdrawal_penalty_rate),
+            standard_deduction            = COALESCE(?7, standard_deduction),
+            age_65_extra_deduction        = COALESCE(?8, age_65_extra_deduction),
+            niit_threshold                = CASE WHEN ?9 THEN ?10 ELSE niit_threshold END,
             updated_at                    = datetime('now')
           WHERE id = ?1 AND user_id = ?2",
     )
@@ -221,10 +243,11 @@ pub(crate) async fn update_in(
     .bind(body.name.as_deref().map(str::trim))
     .bind(&body.description)
     .bind(body.state_rate)
-    .bind(body.capital_gains_rate)
     .bind(body.early_withdrawal_penalty_rate)
     .bind(body.standard_deduction)
     .bind(body.age_65_extra_deduction)
+    .bind(body.niit_threshold.is_some())
+    .bind(body.niit_threshold.flatten())
     .execute(&mut *tx)
     .await
     .map_err(|e| on_unique_violation(e, NAME_TAKEN))?
@@ -248,6 +271,15 @@ pub(crate) async fn update_in(
             .execute(&mut *tx)
             .await?;
         }
+    }
+
+    if let Some(gains) = gains {
+        replace_gain_brackets(
+            &mut tx,
+            id,
+            gains.iter().map(|b| (b.threshold, b.rate)).collect(),
+        )
+        .await?;
     }
 
     sqlx::query("UPDATE scenarios SET updated_at = datetime('now') WHERE tax_config_id = ?1 AND user_id = ?2")
@@ -301,11 +333,12 @@ impl ActivityFields for CreateTaxConfig {
         "name",
         "description",
         "state_rate",
-        "capital_gains_rate",
         "early_withdrawal_penalty_rate",
         "standard_deduction",
         "age_65_extra_deduction",
+        "niit_threshold",
         "federal_brackets",
+        "capital_gains_brackets",
     ];
 }
 
@@ -314,10 +347,11 @@ impl ActivityFields for UpdateTaxConfig {
         "name",
         "description",
         "state_rate",
-        "capital_gains_rate",
         "early_withdrawal_penalty_rate",
         "standard_deduction",
         "age_65_extra_deduction",
+        "niit_threshold",
         "federal_brackets",
+        "capital_gains_brackets",
     ];
 }

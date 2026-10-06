@@ -417,7 +417,7 @@ impl PortfolioProfilesScreen {
                     format_currency(deduction)
                 )
             }
-            FederalBracketsPreset::Custom { brackets } => {
+            FederalBracketsPreset::Custom { brackets, .. } => {
                 if brackets.is_empty() {
                     "Custom (empty)".to_string()
                 } else {
@@ -450,7 +450,16 @@ impl PortfolioProfilesScreen {
         };
 
         let state_rate_str = format_percentage(tax_config.state_rate);
-        let cap_gains_str = format_percentage(tax_config.capital_gains_rate);
+        // The gains schedule goes with the federal preset: "0/15/20%".
+        let gains = tax_config.federal_brackets.capital_gains_brackets();
+        let cap_gains_str = format!(
+            "{}%",
+            gains
+                .iter()
+                .map(|b| format!("{}", (b.rate * 100.0).round()))
+                .collect::<Vec<_>>()
+                .join("/")
+        );
 
         // Helper to create styled config lines
         fn style_config_line<'a>(
@@ -951,7 +960,8 @@ impl PortfolioProfilesScreen {
         {
             // Edit the selected config item
             match state.portfolio_profiles_state.selected_config_index {
-                0 => {
+                // The gains schedule follows the federal preset.
+                0 | 2 => {
                     // Federal Brackets - picker
                     let options = vec!["2024 Single".to_string(), "2024 Married Joint".to_string()];
                     state.modal = ModalState::Picker(PickerModal::new(
@@ -971,20 +981,6 @@ impl PortfolioProfilesScreen {
                         )
                         .with_typed_context(ModalContext::Config(
                             ConfigContext::Tax(TaxConfigContext::StateRate),
-                        )),
-                    );
-                }
-                2 => {
-                    // Capital Gains Rate - form
-                    let rate = state.data().parameters.tax_config.capital_gains_rate;
-                    state.modal = ModalState::Form(
-                        FormModal::new(
-                            "Edit Capital Gains Rate",
-                            vec![FormField::percentage("Capital Gains Rate", rate)],
-                            ModalAction::EDIT_TAX_CONFIG,
-                        )
-                        .with_typed_context(ModalContext::Config(
-                            ConfigContext::Tax(TaxConfigContext::CapGainsRate),
                         )),
                     );
                 }

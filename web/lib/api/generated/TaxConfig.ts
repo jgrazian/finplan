@@ -9,7 +9,6 @@ export type TaxConfig = {
   name: string;
   description: string | null;
   state_rate: number;
-  capital_gains_rate: number;
   early_withdrawal_penalty_rate: number;
   /**
    * Federal standard deduction, in the brackets' dollars.
@@ -19,5 +18,16 @@ export type TaxConfig = {
    * Added to the deduction from the tax year the person turns 65.
    */
   age_65_extra_deduction: number;
+  /**
+   * Modified AGI above which the 3.8% net investment income tax applies
+   * to gains; `None` leaves it out. Not indexed to inflation.
+   */
+  niit_threshold: number | null;
   federal_brackets: Array<Bracket>;
+  /**
+   * The long-term capital gains schedule over taxable income: gains stack
+   * on top of ordinary income and take each band's rate from where they
+   * land. Indexed and moved by the deduction with the federal brackets.
+   */
+  capital_gains_brackets: Array<Bracket>;
 };

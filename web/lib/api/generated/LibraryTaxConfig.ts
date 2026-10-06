@@ -2,17 +2,21 @@
 import type { Bracket } from "./Bracket";
 
 /**
- * A tax config of the library with its bracket table (ascending thresholds),
- * listed by name.
+ * A tax config of the library with its bracket tables (ascending
+ * thresholds), listed by name.
  */
 export type LibraryTaxConfig = {
   id: number;
   name: string;
   description: string | null;
   state_rate: number;
-  capital_gains_rate: number;
   early_withdrawal_penalty_rate: number;
   standard_deduction: number;
   age_65_extra_deduction: number;
+  /**
+   * Where the 3.8% net investment income tax starts; `None` leaves it out.
+   */
+  niit_threshold: number | null;
   federal_brackets: Array<Bracket>;
+  capital_gains_brackets: Array<Bracket>;
 };

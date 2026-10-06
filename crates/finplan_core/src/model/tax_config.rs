@@ -21,8 +21,16 @@ pub struct TaxConfig {
     pub federal_brackets: Vec<TaxBracket>,
     /// Flat state income tax rate (e.g., 0.05 for 5%)
     pub state_rate: f64,
-    /// Long-term capital gains tax rate (e.g., 0.15 for 15%)
-    pub capital_gains_rate: f64,
+    /// Federal long-term capital gains brackets, over taxable income (the
+    /// same dollars as `federal_brackets`, before the deduction is folded
+    /// in). Long-term gains stack on top of ordinary income, so a bracket's
+    /// threshold is where ordinary income plus the year's long-term gains
+    /// crosses into its rate. Must start at 0, ascending.
+    pub capital_gains_brackets: Vec<TaxBracket>,
+    /// Modified AGI above which the 3.8% net investment income tax applies to
+    /// realized gains. `None` leaves it out. Fixed in law, so never indexed.
+    #[serde(default)]
+    pub niit_threshold: Option<f64>,
     /// Early withdrawal penalty rate for retirement accounts (default 0.10 for 10%)
     /// Applies to withdrawals from `TaxDeferred` accounts before age 59.5
     #[serde(default = "default_early_withdrawal_penalty_rate")]
@@ -76,7 +84,8 @@ impl Default for TaxConfig {
                 },
             ],
             state_rate: 0.05,
-            capital_gains_rate: 0.15,
+            capital_gains_brackets: Self::us_2024_single_gains_brackets(),
+            niit_threshold: None,
             early_withdrawal_penalty_rate: 0.10,
             standard_deduction: 0.0,
             age_65_extra_deduction: 0.0,
@@ -85,6 +94,29 @@ impl Default for TaxConfig {
 }
 
 impl TaxConfig {
+    /// Rate of the net investment income tax.
+    pub const NIIT_RATE: f64 = 0.038;
+
+    /// The 2024 long-term capital gains schedule for a single filer: 0% up
+    /// to $47,025 of taxable income, 15% to $518,900, 20% above.
+    #[must_use]
+    pub fn us_2024_single_gains_brackets() -> Vec<TaxBracket> {
+        vec![
+            TaxBracket {
+                threshold: 0.0,
+                rate: 0.0,
+            },
+            TaxBracket {
+                threshold: 47_025.0,
+                rate: 0.15,
+            },
+            TaxBracket {
+                threshold: 518_900.0,
+                rate: 0.20,
+            },
+        ]
+    }
+
     /// The federal brackets over gross ordinary income: `deduction` becomes a
     /// 0% band at the bottom and every threshold moves up by it, which taxes
     /// income exactly as the brackets would tax `income - deduction`.

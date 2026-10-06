@@ -209,8 +209,10 @@ fn a_plan_with_no_investment_cash_runs_as_before() {
     );
     // Pinned from the engine before cash first: the same ledger, figure for
     // figure. (Re-pinned when income tax entries began saying what they were
-    // charged on; the figures did not move.)
-    assert_eq!(fingerprint(&result), 7_172_664_676_904_035_502);
+    // charged on; the figures did not move. Re-pinned again when long-term
+    // gains moved to a stacked schedule and net sales began grossing up
+    // exactly: the taxes did move.)
+    assert_eq!(fingerprint(&result), 12_289_564_930_048_969_858);
 }
 
 /// A one-off sweep from `sources` into checking on 1 March 2030.

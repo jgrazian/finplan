@@ -12,7 +12,8 @@
 
 use finplan_core::model::{TaxBracket, TaxConfig};
 use finplan_core::taxes::{
-    calculate_federal_tax, calculate_realized_gains_tax, calculate_tax_deferred_withdrawal_tax,
+    YtdIncome, calculate_federal_tax, calculate_realized_gains_tax,
+    calculate_tax_deferred_withdrawal_tax,
 };
 use serde_json::{Value, json};
 
@@ -28,7 +29,7 @@ pub fn schema() -> Value {
             "state_rate": {"type": "number", "description": "A fraction; overrides the state table."},
             "year": {"type": "integer", "description": "2024 to 2026 (default 2026)."},
             "pretax_contributions": {"type": "number", "description": "401(k), HSA and similar pre-tax deductions from the income (default 0)."},
-            "long_term_gains": {"type": "number", "description": "Long-term capital gains on top of income (default 0), taxed at the config's flat capital gains rate."},
+            "long_term_gains": {"type": "number", "description": "Long-term capital gains on top of income (default 0), taxed in the year's 0/15/20% gains brackets stacked on taxable income."},
             "wages": {"type": "boolean", "description": "Whether the income is wages, so payroll tax applies (default true)."}
         },
         "required": ["income"]
@@ -51,14 +52,17 @@ fn round2(v: f64) -> f64 {
 
 /// The engine's own configuration from a year's table.
 pub fn config_for(year: i32, status: FilingStatus, state_rate: f64) -> Option<TaxConfig> {
-    let brackets = facts::federal_brackets(year, status)?;
-    Some(TaxConfig {
-        federal_brackets: brackets
+    let table = |brackets: Vec<(f64, f64)>| {
+        brackets
             .into_iter()
             .map(|(threshold, rate)| TaxBracket { threshold, rate })
-            .collect(),
+            .collect()
+    };
+    Some(TaxConfig {
+        federal_brackets: table(facts::federal_brackets(year, status)?),
+        capital_gains_brackets: table(facts::capital_gains_brackets(year, status)?),
+        niit_threshold: None,
         state_rate,
-        capital_gains_rate: 0.15,
         early_withdrawal_penalty_rate: 0.10,
         // `run` takes the deduction off the income itself.
         ..TaxConfig::default()
@@ -139,7 +143,12 @@ pub fn run(input: &Value, plan: Option<&TaxConfig>) -> Result<Value, String> {
     // The engine's flat state tax on the same base, no state deduction.
     let state_tax = adjusted * state_rate;
     let gains_tax = if gains > 0.0 {
-        let g = calculate_realized_gains_tax(0.0, gains, &config, taxable);
+        let g = calculate_realized_gains_tax(
+            0.0,
+            gains,
+            &config,
+            YtdIncome::default().with_ordinary(taxable),
+        );
         g.total_tax
     } else {
         0.0
@@ -251,6 +260,18 @@ mod tests {
         assert_eq!(out["plan_model"]["federal_tax"], 17_053.0);
         assert_eq!(out["plan_model"]["state_tax"], 5_000.0);
         assert_eq!(out["state_source"], "the plan's tax settings");
+    }
+
+    #[test]
+    fn long_term_gains_stack_on_taxable_income() {
+        // Single 2025, $50,000 of wages: taxable 34,250. $20,000 of gains run
+        // from 34,250 to 54,250: 14,100 at 0% up to 48,350, 5,900 at 15%.
+        let out = run(
+            &json!({"income": 50_000, "year": 2025, "long_term_gains": 20_000, "wages": false}),
+            None,
+        )
+        .unwrap();
+        assert_eq!(out["capital_gains_tax"], 885.0);
     }
 
     #[test]

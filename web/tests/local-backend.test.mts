@@ -256,8 +256,8 @@ if (requireEngine("local backend")) {
     const tax = await api.taxConfigs.create({
       name: "Flat",
       state_rate: 0.05,
-      capital_gains_rate: 0.15,
       early_withdrawal_penalty_rate: 0.1,
+      capital_gains_brackets: [{ threshold: 0, rate: 0.15 }],
       standard_deduction: 10_000,
       age_65_extra_deduction: 1_000,
       federal_brackets: [{ threshold: 0, rate: 0.2 }],

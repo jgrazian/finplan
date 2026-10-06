@@ -163,6 +163,38 @@ pub fn age_65_extra(year: i32) -> Option<(f64, f64)> {
 
 /// Federal ordinary-income brackets: (threshold of taxable income, rate),
 /// ascending from zero.
+/// The long-term capital gains brackets, `(from taxable income, rate)`:
+/// 0% from zero, 15%, then 20%. Rev. Proc. 2023-34, 2024-40, 2025-32.
+pub fn capital_gains_brackets(year: i32, status: FilingStatus) -> Option<Vec<(f64, f64)>> {
+    // Where 15% and 20% start.
+    let (fifteen, twenty) = match (year, status) {
+        (2024, FilingStatus::Single) => (47_025., 518_900.),
+        (2024, FilingStatus::MarriedSeparate) => (47_025., 291_850.),
+        (2024, FilingStatus::MarriedJoint) => (94_050., 583_750.),
+        (2024, FilingStatus::HeadOfHousehold) => (63_000., 551_350.),
+        (2025, FilingStatus::Single) => (48_350., 533_400.),
+        (2025, FilingStatus::MarriedSeparate) => (48_350., 300_000.),
+        (2025, FilingStatus::MarriedJoint) => (96_700., 600_050.),
+        (2025, FilingStatus::HeadOfHousehold) => (64_750., 566_700.),
+        (2026, FilingStatus::Single) => (49_450., 545_500.),
+        (2026, FilingStatus::MarriedSeparate) => (49_450., 306_850.),
+        (2026, FilingStatus::MarriedJoint) => (98_900., 613_700.),
+        (2026, FilingStatus::HeadOfHousehold) => (66_200., 579_600.),
+        _ => return None,
+    };
+    Some(vec![(0.0, 0.0), (fifteen, 0.15), (twenty, 0.20)])
+}
+
+/// Where the 3.8% net investment income tax starts, by modified AGI. Fixed
+/// by statute, not indexed.
+pub fn niit_threshold(status: FilingStatus) -> f64 {
+    match status {
+        FilingStatus::MarriedJoint => 250_000.0,
+        FilingStatus::MarriedSeparate => 125_000.0,
+        FilingStatus::Single | FilingStatus::HeadOfHousehold => 200_000.0,
+    }
+}
+
 pub fn federal_brackets(year: i32, status: FilingStatus) -> Option<Vec<(f64, f64)>> {
     const RATES: [f64; 7] = [0.10, 0.12, 0.22, 0.24, 0.32, 0.35, 0.37];
     // Upper edges of the first six brackets.
@@ -628,11 +660,34 @@ pub fn run(input: &Value) -> Result<Value, String> {
                     })
                 })
                 .collect();
+            let gains: serde_json::Map<String, Value> = statuses
+                .iter()
+                .filter_map(|s| {
+                    capital_gains_brackets(year, *s).map(|b| {
+                        (
+                            s.as_str().to_owned(),
+                            json!(
+                                b.iter()
+                                    .map(|(t, r)| json!({"from_taxable_income": t, "rate": r}))
+                                    .collect::<Vec<_>>()
+                            ),
+                        )
+                    })
+                })
+                .collect();
+            let niit: serde_json::Map<String, Value> = statuses
+                .iter()
+                .map(|s| (s.as_str().to_owned(), json!(niit_threshold(*s))))
+                .collect();
             Ok(json!({
                 "topic": topic, "year": year, "status": bracket_status(year),
-                "source": "IRS Rev. Proc. 2023-34, 2024-40, 2025-32",
-                "facts": {"ordinary_income_brackets": by_status},
-                "notes": "Thresholds apply to taxable income (after the standard deduction).",
+                "source": "IRS Rev. Proc. 2023-34, 2024-40, 2025-32; IRC 1411",
+                "facts": {
+                    "ordinary_income_brackets": by_status,
+                    "long_term_capital_gains_brackets": gains,
+                    "net_investment_income_tax_threshold": niit,
+                },
+                "notes": "Thresholds apply to taxable income (after the standard deduction). Long-term gains stack on top of ordinary taxable income and take each band's rate from where they land. The 3.8% net investment income tax threshold is modified AGI and is not indexed.",
             }))
         }
         "social_security" => {

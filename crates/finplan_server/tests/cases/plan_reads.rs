@@ -73,8 +73,11 @@ async fn every_plan_shaped_read_equals_its_route() {
         "/api/tax-configs",
         json!({"name": "Flat twenty", "description": "one bracket", "state_rate": 0.04,
                "standard_deduction": 14600.0, "age_65_extra_deduction": 1950.0,
+               "niit_threshold": 200000.0,
                "federal_brackets": [{"threshold": 0.0, "rate": 0.2},
-                                     {"threshold": 50000.0, "rate": 0.3}]}),
+                                     {"threshold": 50000.0, "rate": 0.3}],
+               "capital_gains_brackets": [{"threshold": 0.0, "rate": 0.0},
+                                          {"threshold": 40000.0, "rate": 0.15}]}),
     )
     .await["id"]
         .as_i64()

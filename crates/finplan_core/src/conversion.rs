@@ -114,7 +114,7 @@ pub(crate) fn evaluate_roth_conversion_into(
     let config = &state.taxes.config;
     let federal_tax = calculate_federal_marginal_tax(
         gross,
-        state.taxes.ytd_tax.ordinary_income,
+        crate::evaluate::ytd_income(state, out).ordinary,
         &config.federal_brackets,
     );
     let state_tax = gross * config.state_rate;

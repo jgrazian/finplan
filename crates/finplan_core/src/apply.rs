@@ -220,6 +220,7 @@ pub fn apply_eval_event_with_source(
             state_tax,
         } => {
             state.taxes.ytd_tax.capital_gains += gross_gain_amount;
+            state.taxes.ytd_short_term_gains += gross_gain_amount;
             state.taxes.ytd_tax.federal_tax += federal_tax;
             state.taxes.ytd_tax.state_tax += state_tax;
 
@@ -240,6 +241,7 @@ pub fn apply_eval_event_with_source(
             state_tax,
         } => {
             state.taxes.ytd_tax.capital_gains += gross_gain_amount;
+            state.taxes.ytd_long_term_gains += gross_gain_amount;
             state.taxes.ytd_tax.federal_tax += federal_tax;
             state.taxes.ytd_tax.state_tax += state_tax;
 

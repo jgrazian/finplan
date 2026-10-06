@@ -48,12 +48,6 @@ pub fn handle_edit_tax_config(state: &mut AppState, ctx: ActionContext) -> Actio
                 return ActionResult::modified();
             }
         }
-        Some(TaxConfigContext::CapGainsRate) => {
-            if let Some(rate) = form.get_percentage(0) {
-                state.data_mut().parameters.tax_config.capital_gains_rate = rate;
-                return ActionResult::modified();
-            }
-        }
         Some(TaxConfigContext::FederalBrackets) | None => {}
     }
 

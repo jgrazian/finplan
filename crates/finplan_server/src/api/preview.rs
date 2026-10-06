@@ -32,6 +32,7 @@ use crate::auth::session::CurrentUser;
 use crate::billing::Entitlements;
 use crate::config::ServerConfig;
 use crate::db::Db;
+use crate::db::library::{TAX_CONFIG_COLUMNS, gain_brackets};
 use crate::error::{ApiError, ApiResult};
 use crate::observability::{JobKind as MetricKind, Origin, Tier};
 use crate::runner::telemetry::Submission;
@@ -646,16 +647,15 @@ pub(crate) async fn load_assumptions(
         if graph.tax_configs.contains_key(&id) {
             continue;
         }
-        let config: Option<TaxConfigRow> = sqlx::query_as(
-            "SELECT id, name, state_rate, capital_gains_rate, early_withdrawal_penalty_rate,
-                   standard_deduction, age_65_extra_deduction
-               FROM tax_configs WHERE id = ?1 AND user_id = ?2",
-        )
+        let config: Option<TaxConfigRow> = sqlx::query_as(&format!(
+            "SELECT {TAX_CONFIG_COLUMNS} FROM tax_configs WHERE id = ?1 AND user_id = ?2"
+        ))
         .bind(id)
         .bind(user_id)
         .fetch_optional(db)
         .await?;
-        if let Some(config) = config {
+        if let Some(mut config) = config {
+            config.capital_gains_brackets = gain_brackets(db, id).await?;
             let brackets: Vec<TaxBracketRow> = sqlx::query_as(
                 "SELECT threshold, rate FROM tax_brackets
                   WHERE tax_config_id = ?1 ORDER BY threshold ASC",

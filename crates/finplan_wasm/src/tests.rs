@@ -8,7 +8,6 @@ use finplan_plan::graph::ScenarioGraph;
 use finplan_plan::library::{Library, LibraryInflationProfile, LibraryTaxConfig};
 use finplan_plan::results::{RunResults, RunSettings, project};
 use finplan_plan::run::CreateRun;
-use finplan_plan::specs::taxes::Bracket;
 use serde_json::{Value, json};
 
 use crate::error::{EngineError, EngineResult};
@@ -33,24 +32,12 @@ pub(crate) fn value(text: &str) -> Value {
 fn library_of(graph: &ScenarioGraph) -> Library {
     let mut library = Library::from_graph(graph);
     if let (Some(tax), Some(id)) = (&graph.tax_config, graph.scenario.tax_config_id) {
-        library.tax_configs.push(LibraryTaxConfig {
+        library.tax_configs.push(LibraryTaxConfig::from_plan(
             id,
-            name: tax.name.clone(),
-            description: None,
-            state_rate: tax.state_rate,
-            capital_gains_rate: tax.capital_gains_rate,
-            early_withdrawal_penalty_rate: tax.early_withdrawal_penalty_rate,
-            standard_deduction: tax.standard_deduction,
-            age_65_extra_deduction: tax.age_65_extra_deduction,
-            federal_brackets: graph
-                .tax_brackets
-                .iter()
-                .map(|b| Bracket {
-                    threshold: b.threshold,
-                    rate: b.rate,
-                })
-                .collect(),
-        });
+            tax.name.clone(),
+            tax,
+            &graph.tax_brackets,
+        ));
     }
     if let (Some(id), Some(name), Some(distribution_id)) = (
         graph.scenario.inflation_profile_id,

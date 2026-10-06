@@ -19,6 +19,7 @@ mod after_tax;
 mod basic;
 mod batches;
 mod builder_dsl;
+mod capital_gains;
 mod cash_first;
 mod contribution_limits;
 mod funding;

@@ -31,7 +31,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use axum::extract::{Path, Query, State};
-use finplan_core::model::{TaxBracket, TaxConfig};
+use finplan_core::model::TaxConfig;
 use serde_json::Value;
 use tokio::sync::Semaphore;
 use tokio::task::AbortHandle;
@@ -928,23 +928,8 @@ impl ToolHost for Tools<'_> {
     }
 
     fn plan_tax_config(&self) -> Option<TaxConfig> {
-        let config = self.graph.tax_config.as_ref()?;
-        Some(TaxConfig {
-            federal_brackets: self
-                .graph
-                .tax_brackets
-                .iter()
-                .map(|b| TaxBracket {
-                    threshold: b.threshold,
-                    rate: b.rate,
-                })
-                .collect(),
-            state_rate: config.state_rate,
-            capital_gains_rate: config.capital_gains_rate,
-            early_withdrawal_penalty_rate: config.early_withdrawal_penalty_rate,
-            standard_deduction: config.standard_deduction,
-            age_65_extra_deduction: config.age_65_extra_deduction,
-        })
+        self.graph.tax_config.as_ref()?;
+        finplan_plan::compile::tax_config(&self.graph).ok()
     }
 
     fn resolve_steps(

@@ -513,7 +513,7 @@ mod tests {
         source.close().await;
 
         let report = rebuild(&source_path, &destination_path).await.unwrap();
-        assert_eq!(report.tables, 60);
+        assert_eq!(report.tables, 61);
 
         let rebuilt = connect(&format!("sqlite://{}", destination_path.display()), 1)
             .await
@@ -560,6 +560,71 @@ mod tests {
         assert_eq!(old_details, 2, "the source database was modified");
         untouched.close().await.unwrap();
     }
+    /// Migration 0028 gives the seeded 2024 single config the real gains
+    /// schedule, every other config its flat rate as one bracket, and drops
+    /// the rate.
+    #[tokio::test]
+    async fn the_gains_schedule_migration_keeps_every_configs_tax() {
+        let mut conn = SqliteConnection::connect_with(
+            &SqliteConnectOptions::new()
+                .in_memory(true)
+                .foreign_keys(true),
+        )
+        .await
+        .unwrap();
+        apply(&mut conn, 0, 27).await;
+        for sql in [
+            "INSERT INTO users(id,email,password_hash) VALUES('u','u@example.com','h')",
+            // As registration seeded it.
+            "INSERT INTO tax_configs(id,user_id,name,capital_gains_rate)
+                 VALUES(1,'u','US Federal 2024 (single)',0.15)",
+            "INSERT INTO tax_brackets(tax_config_id,threshold,rate) VALUES(1,0,0.10),(1,11600,0.12)",
+            // The seeded name, but its gains rate since changed.
+            "INSERT INTO users(id,email,password_hash) VALUES('v','v@example.com','h')",
+            "INSERT INTO tax_configs(id,user_id,name,capital_gains_rate)
+                 VALUES(2,'v','US Federal 2024 (single)',0.20)",
+            "INSERT INTO tax_brackets(tax_config_id,threshold,rate) VALUES(2,0,0.10),(2,11600,0.12)",
+            "INSERT INTO tax_configs(id,user_id,name,capital_gains_rate) VALUES(3,'u','Flat',0.18)",
+        ] {
+            sqlx::query(sql).execute(&mut conn).await.unwrap();
+        }
+
+        apply(&mut conn, 27, 28).await;
+
+        let schedule = |id: i64| {
+            sqlx::query_as::<_, (f64, f64)>(
+                "SELECT threshold, rate FROM tax_gain_brackets
+                  WHERE tax_config_id = ?1 ORDER BY threshold",
+            )
+            .bind(id)
+        };
+        assert_eq!(
+            schedule(1).fetch_all(&mut conn).await.unwrap(),
+            vec![(0.0, 0.0), (47_025.0, 0.15), (518_900.0, 0.20)]
+        );
+        assert_eq!(
+            schedule(2).fetch_all(&mut conn).await.unwrap(),
+            vec![(0.0, 0.20)]
+        );
+        assert_eq!(
+            schedule(3).fetch_all(&mut conn).await.unwrap(),
+            vec![(0.0, 0.18)]
+        );
+        let niit: Option<f64> =
+            sqlx::query_scalar("SELECT niit_threshold FROM tax_configs WHERE id = 1")
+                .fetch_one(&mut conn)
+                .await
+                .unwrap();
+        assert_eq!(niit, None);
+        assert!(
+            sqlx::query("SELECT capital_gains_rate FROM tax_configs")
+                .fetch_all(&mut conn)
+                .await
+                .is_err(),
+            "the flat rate is gone"
+        );
+    }
+
     /// Apply migrations `from < version <= to`, each in a transaction as the
     /// real migrator does.
     async fn apply(conn: &mut SqliteConnection, from: i64, to: i64) {

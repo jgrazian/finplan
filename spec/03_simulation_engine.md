@@ -101,8 +101,26 @@ When selling assets, lots are selected based on `LotMethod`:
 
 ### Capital Gains
 
-- **Short-term**: Held < 1 year, taxed as ordinary income
-- **Long-term**: Held >= 1 year, lower tax rate
+- **Short-term**: Held < 1 year, taxed as ordinary income. Short-term gains
+  count toward the year's ordinary income, so later income that year is taxed
+  from where they left it.
+- **Long-term**: Held >= 1 year, taxed in `capital_gains_brackets` (0% / 15% /
+  20% in law), stacked on top of the year's ordinary income and earlier
+  long-term gains. The schedule is over taxable income: the engine moves it by
+  the standard deduction and indexes it to inflation with the federal
+  brackets, so deduction that ordinary income leaves unused shelters gains.
+- **Net investment income tax**: with a `niit_threshold`, 3.8% of the lesser of
+  the year's gains and how far ordinary income plus long-term gains is over the
+  threshold. Not indexed.
+- **Year to date**: every sale reads the year's income as applied so far plus
+  the tax events already evaluated in the same effect (other assets, other
+  accounts of a sweep), so a multi-asset or multi-account sale is taxed
+  dollar after dollar.
+- **Net amounts**: a sale asked for a net amount grosses up exactly: the
+  ordinary brackets inverted for a tax-deferred account, a solve against the
+  lots the sale consumes for a taxable one, the net itself for a tax-free one.
+- **Not modeled**: capital losses. A lot sold at a loss realizes no gain, but
+  the loss offsets nothing and does not carry forward.
 
 The liquidation module tracks:
 - Proceeds from sale
