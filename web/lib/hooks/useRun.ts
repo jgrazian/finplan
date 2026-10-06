@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { planApiFor } from "@/lib/nav/api";
 import { homeOf } from "@/lib/nav/url";
 import type { Results, Run, Scenario } from "@/lib/api/types";
@@ -76,17 +76,32 @@ export function useRun(scenario: Scenario | undefined, planRef: string | undefin
       }).catch((e:Error)=>live && update(key,v=>({...v,error:e.message,loading:false})));
     return ()=>{live=false;};
   },[id,home,key,selectedRunId,percentile,update]);
+  // Keyed on the id, not the run: each answer replaces the run object, and
+  // that must not restart the poll.
+  const pollId=active ? run.id : undefined;
   useEffect(()=>{
-    if (id == null || key == null || !run || isTerminal(run.status)) return;
+    if (id == null || key == null || pollId == null) return;
     let live=true;
-    const timer=setInterval(async()=>{
+    let inFlight=false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    // One request at a time, the next scheduled when this one answers; a
+    // hidden tab stops asking and picks up again when shown.
+    const poll=async()=>{
+      timer=undefined;
+      if(!live || document.hidden) return;
+      inFlight=true;
       try {
-        const next=await planApiFor(home).runs.get(run.id);
+        const next=await planApiFor(home).runs.get(pollId);
         if(live) update(key,v=>({...v,history:v.history.map(r=>r.id === next.id ? next : r),error:next.status === "failed" ? next.error_message ?? "Run failed" : v.error}));
       } catch(e) {if(live) update(key,v=>({...v,error:e instanceof Error ? e.message : String(e)}));}
-    },700);
-    return ()=>{live=false;clearInterval(timer);};
-  },[id,home,key,run,update]);
+      inFlight=false;
+      if(live) timer=setTimeout(poll,700);
+    };
+    const onVisible=()=>{if(!document.hidden && !inFlight && timer === undefined) void poll();};
+    timer=setTimeout(poll,700);
+    document.addEventListener("visibilitychange",onVisible);
+    return ()=>{live=false;clearTimeout(timer);document.removeEventListener("visibilitychange",onVisible);};
+  },[id,home,key,pollId,update]);
   useEffect(()=>{
     if(run?.status === "failed") serverMonitor.runFailed({completed:run.completed_iterations,total:run.max_iterations ?? run.iterations,message:run.error_message,hasResults:current?.raw != null});
     else serverMonitor.runCleared();
@@ -115,8 +130,12 @@ export function useRun(scenario: Scenario | undefined, planRef: string | undefin
   },[key,update]);
   const raw=current?.raw;
   const inputs=current?.inputs;
-  const source=raw && inputs ? snapshotScenario(inputs,raw) : undefined;
-  const results=raw && source ? toResultsData(raw,source,planAxis(source)) : undefined;
+  // Built once per fetched run: a fresh object each render would re-render
+  // every chart and invalidate the memos downstream on each poll.
+  const results=useMemo(()=>{
+    const source=raw && inputs ? snapshotScenario(inputs,raw) : undefined;
+    return raw && source ? toResultsData(raw,source,planAxis(source)) : undefined;
+  },[raw,inputs]);
   const stale=raw != null && (current?.hashPending === true || !inputs?.input_hash || inputs.input_hash !== current?.hash);
   const loading=(current?.loading ?? id != null) || (!current?.error && selectedRunId != null && (raw?.run_id !== selectedRunId || current?.rawSeries !== percentile));
   return {run,results,history,selectedRunId,selectRun,inputs,active,stale,markInputsChanged,loading,error:current?.error,percentile,setPercentile,start,cancel,refresh};

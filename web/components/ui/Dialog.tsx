@@ -34,10 +34,17 @@ export function Dialog({
   children: ReactNode;
 }) {
   const panel = useRef<HTMLFormElement>(null);
+  // Callers pass inline closures; reading the latest through a ref keeps the
+  // effect below to mount, so a re-render never steals focus from the field
+  // being typed in.
+  const close = useRef(onClose);
+  useEffect(() => {
+    close.current = onClose;
+  });
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape") close.current();
     };
     window.addEventListener("keydown", onKey);
     // Focus the first control so the dialog is usable without reaching for the
@@ -46,7 +53,7 @@ export function Dialog({
     (panel.current?.querySelector<HTMLElement>("input, select, textarea") ??
       panel.current?.querySelector<HTMLElement>("button[type=submit]"))?.focus();
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  }, []);
 
   return (
     <div

@@ -39,6 +39,7 @@ fn config() -> ServerConfig {
         max_iterations: PRO_CAP,
         secure_cookies: true,
         cors_origins: vec!["https://finplan.example".into()],
+        trusted_proxies: vec![],
     }
 }
 

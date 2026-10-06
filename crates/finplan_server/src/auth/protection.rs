@@ -2,12 +2,13 @@
 use crate::state::AppState;
 use axum::{
     extract::{Request, State},
-    http::{Method, StatusCode},
+    http::{HeaderMap, Method, StatusCode},
     middleware::Next,
     response::{IntoResponse, Response},
 };
 use std::{
     collections::HashMap,
+    net::{IpAddr, SocketAddr},
     sync::{Mutex, OnceLock},
     time::{Duration, Instant},
 };
@@ -39,7 +40,7 @@ struct Window {
 static WINDOWS: OnceLock<Mutex<HashMap<String, Window>>> = OnceLock::new();
 static HASH_SLOTS: OnceLock<std::sync::Arc<tokio::sync::Semaphore>> = OnceLock::new();
 
-/// Process-local bounded limiter. Never trusts forwarded headers. Global cap also
+/// Process-local bounded limiter, keyed on [`client_addr`]. Global cap also
 /// protects deployments that have not supplied a trusted peer address.
 pub async fn auth_throttle(State(state): State<AppState>, req: Request, next: Next) -> Response {
     if !state.config.hosted
@@ -48,11 +49,13 @@ pub async fn auth_throttle(State(state): State<AppState>, req: Request, next: Ne
     {
         return next.run(req).await;
     }
-    let peer = req
-        .extensions()
-        .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
-        .map(|p| p.0.ip().to_string())
-        .unwrap_or_else(|| "unknown-peer".into());
+    let peer = client_addr(
+        &state.config.trusted_proxies,
+        req.extensions()
+            .get::<axum::extract::ConnectInfo<SocketAddr>>()
+            .map(|c| c.0),
+        req.headers(),
+    );
     let limited = {
         let mut windows = WINDOWS.get_or_init(Default::default).lock().unwrap();
         let now = Instant::now();
@@ -130,13 +133,31 @@ const GUEST_WINDOW_KEYS: usize = 4096;
 static GUEST_WINDOWS: OnceLock<Mutex<HashMap<String, Window>>> = OnceLock::new();
 static GUEST_GLOBAL: OnceLock<Mutex<Window>> = OnceLock::new();
 
-/// The address the request arrived from, as `auth_throttle` reads it. Forwarded
-/// headers are never trusted.
+/// The visitor's address, which every limiter here keys on.
+///
+/// The connecting peer, unless it is one of `trusted` (the local Next.js
+/// proxy in production). Then `X-Forwarded-For` is read right to left,
+/// skipping trusted hops: the first other entry was appended by a proxy we
+/// believe (Cloudflare appends the visitor; Next.js sets the header only when
+/// absent), whereas anything further left is the client's own say-so.
 #[must_use]
-pub fn peer_of(connect: Option<axum::extract::ConnectInfo<std::net::SocketAddr>>) -> String {
-    connect
-        .map(|p| p.0.ip().to_string())
-        .unwrap_or_else(|| "unknown-peer".into())
+pub fn client_addr(trusted: &[IpAddr], connect: Option<SocketAddr>, headers: &HeaderMap) -> String {
+    let Some(peer) = connect.map(|c| c.ip()) else {
+        return "unknown-peer".into();
+    };
+    if !trusted.contains(&peer) {
+        return peer.to_string();
+    }
+    headers
+        .get_all("x-forwarded-for")
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .flat_map(|v| v.split(','))
+        .rev()
+        .filter_map(|hop| hop.trim().parse::<IpAddr>().ok())
+        .find(|ip| !trusted.contains(ip))
+        .unwrap_or(peer)
+        .to_string()
 }
 
 /// Count one guest creation against the per-address and process-wide limits.
@@ -186,4 +207,51 @@ pub fn guest_attempt(state: &AppState, peer: &str) -> crate::error::ApiResult<()
         return limited(60);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const PROXY: &str = "127.0.0.1:50000";
+
+    fn addr(trusted: &[&str], peer: &str, xff: &[&str]) -> String {
+        let trusted: Vec<IpAddr> = trusted.iter().map(|t| t.parse().unwrap()).collect();
+        let mut headers = HeaderMap::new();
+        for v in xff {
+            headers.append("x-forwarded-for", v.parse().unwrap());
+        }
+        client_addr(&trusted, Some(peer.parse().unwrap()), &headers)
+    }
+
+    #[test]
+    fn untrusted_peer_ignores_forwarded_header() {
+        assert_eq!(addr(&[], PROXY, &["203.0.113.9"]), "127.0.0.1");
+        assert_eq!(
+            addr(&["127.0.0.1"], "198.51.100.4:1", &["203.0.113.9"]),
+            "198.51.100.4"
+        );
+    }
+
+    #[test]
+    fn trusted_peer_yields_rightmost_untrusted_hop() {
+        let trusted = ["127.0.0.1", "::1"];
+        assert_eq!(addr(&trusted, PROXY, &["203.0.113.9"]), "203.0.113.9");
+        // A visitor's forged prefix is skipped: the proxy appended the real one.
+        assert_eq!(
+            addr(&trusted, PROXY, &["10.0.0.1, 203.0.113.9"]),
+            "203.0.113.9"
+        );
+        assert_eq!(
+            addr(&trusted, PROXY, &["203.0.113.9", "::1"]),
+            "203.0.113.9"
+        );
+    }
+
+    #[test]
+    fn trusted_peer_without_usable_header_is_itself() {
+        let trusted = ["127.0.0.1"];
+        assert_eq!(addr(&trusted, PROXY, &[]), "127.0.0.1");
+        assert_eq!(addr(&trusted, PROXY, &["not-an-ip"]), "127.0.0.1");
+    }
 }

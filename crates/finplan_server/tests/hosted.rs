@@ -29,6 +29,7 @@ fn config() -> ServerConfig {
         max_iterations: 50000,
         secure_cookies: true,
         cors_origins: vec!["https://finplan.example".into()],
+        trusted_proxies: vec![],
     }
 }
 #[tokio::test]

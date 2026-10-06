@@ -72,7 +72,12 @@ async fn create(
                 "Guest access is not available. Sign in or create an account.".into(),
             ));
         }
-        protection::guest_attempt(&state, &protection::peer_of(connect.map(|Extension(c)| c)))?;
+        let peer = protection::client_addr(
+            &state.config.trusted_proxies,
+            connect.map(|Extension(ConnectInfo(addr))| addr),
+            &headers,
+        );
+        protection::guest_attempt(&state, &peer)?;
     }
 
     let id = uuid::Uuid::new_v4().to_string();

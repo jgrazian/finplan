@@ -599,11 +599,14 @@ function Workbench({
   // Keyboard parity with the TUI: `r` runs, as the header's keycap advertises.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "r" || e.metaKey || e.ctrlKey || e.altKey || e.repeat) return;
+      // A control that used the key (a dropdown's type-ahead) says so.
+      if (e.defaultPrevented) return;
       const el = e.target as HTMLElement | null;
-      if (el && /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName)) return;
-      // New scenario covers the plan that `r` would run.
-      if (creating) return;
-      if (e.key === "r" && !e.metaKey && !e.ctrlKey) start();
+      if (el && (/^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName) || el.isContentEditable)) return;
+      // Nor while a dialog covers the plan, or New scenario does.
+      if (creating || document.querySelector('[aria-modal="true"]')) return;
+      start();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);

@@ -17,6 +17,8 @@ pub const COOKIE_NAME: &str = "finplan_session";
 
 /// How long a freshly issued session stays valid.
 pub const SESSION_TTL_DAYS: i64 = 30;
+/// How stale `sessions.last_seen` may get before a request rewrites it.
+const TOUCH_INTERVAL_SECS: i64 = 300;
 
 /// A freshly minted session: the plaintext token goes to the client exactly
 /// once, only its SHA-256 is persisted.
@@ -164,42 +166,30 @@ impl FromRequestParts<AppState> for CurrentUser {
         let token = token_of(&parts.headers).ok_or(ApiError::Unauthorized)?;
         let token_hash = hash_token(&token);
 
-        let row: Option<(String, String, String, bool)> = sqlx::query_as(
-            "SELECT u.id, u.email, s.public_id, u.kind = 'guest'
+        let row: Option<(String, String, String, bool, bool)> = sqlx::query_as(
+            "SELECT u.id, u.email, s.public_id, u.kind = 'guest',
+                    s.last_seen <= datetime('now', ?2)
                FROM sessions s
                JOIN users u ON u.id = s.user_id
               WHERE s.token_hash = ?1 AND s.expires_at > datetime('now')",
         )
         .bind(&token_hash)
+        .bind(format!("-{TOUCH_INTERVAL_SECS} seconds"))
         .fetch_optional(&state.db)
         .await?;
 
-        let (id, email, session_id, guest) = row.ok_or(ApiError::Unauthorized)?;
+        let (id, email, session_id, guest, stale) = row.ok_or(ApiError::Unauthorized)?;
 
         RequestContext::authenticate(&id);
 
         // Touch the session so idle-time can be reasoned about later. A guest's
         // session slides: retention (spec 17) is measured from the last visit, so
         // a guest who comes back daily must not be signed out at day 30. Accounts
-        // keep the expiry fixed at issue.
-        match sqlx::query(
-            "UPDATE sessions
-                SET last_seen = datetime('now'),
-                    expires_at = CASE WHEN ?2 THEN datetime('now', ?3) ELSE expires_at END
-              WHERE token_hash = ?1",
-        )
-        .bind(&token_hash)
-        .bind(guest)
-        .bind(format!("+{SESSION_TTL_DAYS} days"))
-        .execute(&state.db)
-        .await
-        {
-            Ok(_) => state
-                .telemetry
-                .recovered_error(Component::Session, ErrorClass::Database),
-            Err(_) => state
-                .telemetry
-                .recoverable_error(Component::Session, ErrorClass::Database),
+        // keep the expiry fixed at issue. At most once per TOUCH_INTERVAL_SECS:
+        // SQLite has one writer, and a write on every read would queue behind
+        // run results.
+        if stale {
+            touch(state, &token_hash, guest).await;
         }
 
         Ok(CurrentUser {
@@ -208,5 +198,27 @@ impl FromRequestParts<AppState> for CurrentUser {
             session_id,
             guest,
         })
+    }
+}
+
+async fn touch(state: &AppState, token_hash: &str, guest: bool) {
+    match sqlx::query(
+        "UPDATE sessions
+                SET last_seen = datetime('now'),
+                    expires_at = CASE WHEN ?2 THEN datetime('now', ?3) ELSE expires_at END
+              WHERE token_hash = ?1",
+    )
+    .bind(token_hash)
+    .bind(guest)
+    .bind(format!("+{SESSION_TTL_DAYS} days"))
+    .execute(&state.db)
+    .await
+    {
+        Ok(_) => state
+            .telemetry
+            .recovered_error(Component::Session, ErrorClass::Database),
+        Err(_) => state
+            .telemetry
+            .recoverable_error(Component::Session, ErrorClass::Database),
     }
 }

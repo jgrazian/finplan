@@ -99,6 +99,7 @@ impl TestApp {
             offload: Default::default(),
             local_mail_sink: None,
             cors_origins: vec!["http://localhost:3000".into()],
+            trusted_proxies: vec![],
         };
 
         let (router, _state) = finplan_server::build_with(config, review_ai)

@@ -152,6 +152,13 @@ pub struct ServerConfig {
         default_value = "http://localhost:3000"
     )]
     pub cors_origins: Vec<String>,
+
+    /// Peers whose `X-Forwarded-For` is believed, comma-separated, e.g.
+    /// `127.0.0.1,::1` when the Next.js server proxies `/api` from the same
+    /// host. Rate limits then key on the visitor's address rather than the
+    /// proxy's. Empty (the default) trusts no forwarded header.
+    #[arg(long, env = "FINPLAN_TRUSTED_PROXIES", value_delimiter = ',')]
+    pub trusted_proxies: Vec<std::net::IpAddr>,
 }
 
 impl ServerConfig {

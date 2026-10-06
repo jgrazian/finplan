@@ -43,6 +43,7 @@ fn config(hosted: bool) -> ServerConfig {
         max_iterations: 50000,
         secure_cookies: hosted,
         cors_origins: vec![ORIGIN.into()],
+        trusted_proxies: vec![],
     }
 }
 
@@ -204,10 +205,13 @@ async fn a_guests_session_slides_and_an_accounts_does_not() {
     let (cookie, user) = app.guest().await;
     let account = app.register("slider@example.com").await;
     let near = "datetime('now', '+1 day')";
-    sqlx::query(&format!("UPDATE sessions SET expires_at = {near}"))
-        .execute(&app.state.db)
-        .await
-        .unwrap();
+    // Last seen long enough ago that the next request touches the session.
+    sqlx::query(&format!(
+        "UPDATE sessions SET expires_at = {near}, last_seen = datetime('now', '-1 hour')"
+    ))
+    .execute(&app.state.db)
+    .await
+    .unwrap();
 
     for (cookie, is_guest) in [(&cookie, true), (&account, false)] {
         let (status, headers, _) = app

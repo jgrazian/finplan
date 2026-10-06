@@ -42,6 +42,7 @@ fn config(hosted: bool) -> ServerConfig {
         max_iterations: 50_000,
         secure_cookies: hosted,
         cors_origins: vec![ORIGIN.into()],
+        trusted_proxies: vec![],
     }
 }
 

@@ -73,6 +73,7 @@ impl Fixture {
             max_iterations: 50_000,
             secure_cookies: false,
             cors_origins: vec!["http://localhost:3000".into()],
+            trusted_proxies: vec![],
             log_format: LogFormat::Json,
             metrics_bind: None,
         };

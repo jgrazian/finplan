@@ -266,6 +266,7 @@ mod tests {
             max_iterations: 100,
             secure_cookies: false,
             cors_origins: vec!["http://localhost:3000".into()],
+            trusted_proxies: vec![],
         }
     }
 

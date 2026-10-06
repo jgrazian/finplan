@@ -209,6 +209,7 @@ pub(super) async fn app_with_state() -> (TestApp, finplan_server::state::AppStat
         offload: Default::default(),
         local_mail_sink: None,
         cors_origins: vec!["http://localhost:3000".into()],
+        trusted_proxies: vec![],
     };
     let (router, state) = finplan_server::build_with(config, None)
         .await

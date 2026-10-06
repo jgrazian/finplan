@@ -363,6 +363,12 @@ async fn auth_failures_are_generic_and_session_maintenance_failures_are_aggregat
         "a failed login never reports account existence or an actor"
     );
     app.logs.clear();
+    // A session seen moments ago is not touched again; age it so every
+    // request below tries (and fails) to.
+    sqlx::query("UPDATE sessions SET last_seen = datetime('now', '-1 hour')")
+        .execute(&app.state.db)
+        .await
+        .unwrap();
     sqlx::query("CREATE TRIGGER fail_session_touch BEFORE UPDATE ON sessions BEGIN SELECT RAISE(FAIL,'private-error-sentinel'); END")
         .execute(&app.state.db).await.unwrap();
     for _ in 0..3 {
