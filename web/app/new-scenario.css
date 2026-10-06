@@ -294,6 +294,73 @@
   font-size: 12.5px;
 }
 
+/* Guided setup's first working year, salary down to what is left. */
+.ns-takehome {
+  display: flex;
+  flex-direction: column;
+  padding: 4px 16px 12px;
+  border: 1px solid var(--color-divider);
+}
+
+.ns-takehome-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 7px 0;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.ns-takehome-row > span:last-child {
+  white-space: nowrap;
+}
+
+.ns-takehome-row + .ns-takehome-row {
+  border-top: 1px solid var(--color-divider);
+}
+
+.ns-takehome-total {
+  font-weight: 600;
+}
+
+.ns-takehome-short {
+  color: var(--color-danger);
+}
+
+.ns-question .ns-takehome p {
+  margin-top: 8px;
+}
+
+.ns-question .ns-takehome .ns-takehome-note {
+  font-size: 12px;
+}
+
+/* The Assume step's defaults, each with where it comes from. */
+.ns-assume-row {
+  display: grid;
+  grid-template-columns: 170px minmax(0, 1fr);
+  gap: 12px;
+  align-items: baseline;
+  padding: 9px 0;
+  border-top: 1px solid var(--color-divider);
+  font-size: 13.5px;
+}
+
+.ns-assume-row:last-child {
+  border-bottom: 1px solid var(--color-divider);
+}
+
+.ns-question .ns-assume-change {
+  align-self: flex-start;
+}
+
+@media (max-width: 640px) {
+  .ns-assume-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 2px;
+  }
+}
+
 .ns-foot.ns-foot-rail {
   padding: 14px 24px;
 }

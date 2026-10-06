@@ -113,6 +113,7 @@ const DEFAULT_COLUMNS: ColumnKey[] = [
   "withdrawals",
   "appreciation",
   "taxes",
+  "netCashFlow",
   "netWorth",
 ];
 

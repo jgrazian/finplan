@@ -22,6 +22,7 @@ import { PRIVACY_PROMISE } from "@/lib/local/durability";
 import { HOME_LABEL, HomeIcon } from "@/components/local/HomeIcon";
 import { type PlanHome, planApiFor, planCapabilities } from "@/lib/nav";
 import { addYears, money, yearsBetween } from "@/lib/view/format";
+import { takeHome, type TakeHome } from "@/lib/view/takeHome";
 import { DescribeSetup } from "./DescribeSetup";
 import { SetupBar } from "./SetupBar";
 import {
@@ -65,8 +66,8 @@ const steps = [
   },
   {
     short: "Assume",
-    title: "Which assumptions should this plan use?",
-    lead: "Returns, inflation and taxes, and what pays for spending when checking runs short.",
+    title: "Here's what we'll assume",
+    lead: "Defaults based on historical data, so you don't have to guess. Each one is an ordinary setting you can change now or later.",
   },
   {
     short: "Review",
@@ -94,8 +95,12 @@ type SetupDraft = SetupPlan & {
   has_other_investments: boolean | null;
   contribute_401k: boolean;
   monthly_spending: number;
-  monthly_retirement_spending: number;
+  /** Retirement spending as a percent of working-year spending. */
+  retirement_spending_percent: number;
 };
+
+/** Where retirement spending starts: a common rule of thumb, not a forecast. */
+const DEFAULT_RETIREMENT_SPENDING_PERCENT = 90;
 
 type AmountField =
   | "duration_years"
@@ -106,8 +111,7 @@ type AmountField =
   | "stock_percent"
   | "annual_income"
   | "retirement_401k_contribution_percent"
-  | "monthly_spending"
-  | "monthly_retirement_spending";
+  | "monthly_spending";
 
 const TAX_TAGS: Record<string, PreviewAccount["tax"]> = {
   Taxable: { label: "Taxable", tone: "neutral" },
@@ -138,6 +142,50 @@ function YesNo({
   );
 }
 
+/**
+ * The first working year from gross salary to what is left after spending,
+ * so a shortfall, and the income tax that widens it, is seen before the run.
+ */
+function TakeHomeLine({ year, taxName }: { year: TakeHome; taxName?: string }) {
+  if (year.gross <= 0 && year.spending <= 0) return null;
+  const short = year.surplus < 0;
+  const row = (label: ReactNode, value: number, className = "") => (
+    <div className={`ns-takehome-row ${className}`}>
+      <span>{label}</span>
+      <span>{money(value)}</span>
+    </div>
+  );
+  return (
+    <section className="ns-takehome" aria-label="First year take-home pay">
+      {row("Salary", year.gross)}
+      {year.deferral > 0 && row("401(k) contribution, pre-tax", -year.deferral)}
+      {row(
+        <>
+          Income tax, estimated{" "}
+          <span className="ns-mut">· {taxName ? `federal + state, ${taxName}` : "no taxes modeled"}</span>
+        </>,
+        -(year.federal + year.state),
+      )}
+      {row("Take-home pay", year.net, "ns-takehome-total")}
+      {row("Spending", -year.spending)}
+      {row(
+        short ? "Shortfall each year" : "Left over each year",
+        year.surplus,
+        `ns-takehome-total${short ? " ns-takehome-short" : ""}`,
+      )}
+      {short && (
+        <p role="status" className="ns-takehome-short">
+          You would spend {money(-year.surplus)} a year more than you take home. Until retirement the
+          plan covers the gap from your savings, and runs short if they run out.
+        </p>
+      )}
+      <p className="ns-mut ns-takehome-note">
+        First plan year. Payroll taxes (Social Security and Medicare) are not modeled.
+      </p>
+    </section>
+  );
+}
+
 /** Strip the UI-only answers before the draft crosses the API boundary. */
 function setupPlanOf(draft: SetupDraft): SetupPlan {
   const plan = { ...draft };
@@ -147,12 +195,12 @@ function setupPlanOf(draft: SetupDraft): SetupPlan {
   delete answers.has_other_investments;
   delete answers.contribute_401k;
   delete answers.monthly_spending;
-  delete answers.monthly_retirement_spending;
+  delete answers.retirement_spending_percent;
   plan.retirement_401k_contribution_percent = draft.contribute_401k
     ? draft.retirement_401k_contribution_percent
     : 0;
   plan.annual_spending = draft.monthly_spending * 12;
-  plan.retirement_spending = draft.monthly_retirement_spending * 12;
+  plan.retirement_spending = (draft.monthly_spending * 12 * draft.retirement_spending_percent) / 100;
   return plan;
 }
 
@@ -168,7 +216,7 @@ interface NewScenarioProps {
   /** Offered only when there is a choice, i.e. local mode is on. */
   onHomeChange?: (home: PlanHome) => void;
   onClose: () => void;
-  onCreated: (s: Scenario) => void;
+  onCreated: (s: Scenario, nextTab: "plan" | "results") => void;
   /** A draft is opened on Review; it stays a draft until Create & run. */
   onReviewDraft?: (draft: Scenario) => void;
   /** Create & run made a draft a plan and queued its run. */
@@ -337,6 +385,8 @@ function GuidedSetup(
   const { blank, onStep: setStep } = props;
   const [profiles, setProfiles] = useState(props.returnProfiles ?? []);
   const [stepError, setStepError] = useState<string>();
+  // The Assume step shows its defaults as a summary until asked to change them.
+  const [customizing, setCustomizing] = useState(false);
   // A cloud plan's draft keeps its original key; a local plan's is its own,
   // since the profile ids in it belong to that home's library.
   const api = planApiFor(props.home);
@@ -363,7 +413,7 @@ function GuidedSetup(
       annual_spending: 0,
       retirement_spending: 0,
       monthly_spending: 0,
-      monthly_retirement_spending: 0,
+      retirement_spending_percent: DEFAULT_RETIREMENT_SPENDING_PERCENT,
       inflation_profile_id: props.inflationProfiles[0]?.id ?? null,
       tax_config_id: props.taxConfigs[0]?.id ?? null,
       fund_from_investments: true,
@@ -376,7 +426,11 @@ function GuidedSetup(
     try {
       const value = localStorage.getItem(key);
       if (!value) return empty;
-      const saved = JSON.parse(value) as Partial<SetupDraft>;
+      // A draft saved before retirement spending was a percent kept it in dollars.
+      const { monthly_retirement_spending: legacyRetirement, ...saved } = JSON.parse(value) as Partial<SetupDraft> & {
+        monthly_retirement_spending?: number;
+      };
+      const monthlySpending = saved.monthly_spending ?? (saved.annual_spending ?? 0) / 12;
       return {
         ...empty,
         ...saved,
@@ -387,9 +441,12 @@ function GuidedSetup(
           typeof saved.contribute_401k === "boolean"
             ? saved.contribute_401k
             : (saved.retirement_401k_contribution_percent ?? 0) > 0,
-        monthly_spending: saved.monthly_spending ?? (saved.annual_spending ?? 0) / 12,
-        monthly_retirement_spending:
-          saved.monthly_retirement_spending ?? (saved.retirement_spending ?? 0) / 12,
+        monthly_spending: monthlySpending,
+        retirement_spending_percent:
+          saved.retirement_spending_percent ??
+          (legacyRetirement && monthlySpending > 0
+            ? Math.round((legacyRetirement / monthlySpending) * 100)
+            : DEFAULT_RETIREMENT_SPENDING_PERCENT),
         has_cash:
           typeof saved.has_cash === "boolean" ? saved.has_cash : (saved.cash ?? 0) > 0 || null,
         has_401k:
@@ -488,6 +545,18 @@ function GuidedSetup(
     EMPLOYEE_401K_DEFERRAL_LIMIT_2026,
   );
   const contributionIsCapped = uncapped401kContribution > annual401kContribution;
+  const annualWorkingSpending = draft.monthly_spending * 12;
+  const monthlyRetirementSpending =
+    (draft.monthly_spending * draft.retirement_spending_percent) / 100;
+  const taxConfig = props.taxConfigs.find((tax) => tax.id === draft.tax_config_id);
+  // The first working year, as the take-home line shows it. Before the Saving
+  // step has been answered there is no deferral yet.
+  const firstYear = takeHome(
+    draft.annual_income,
+    annual401kContribution,
+    annualWorkingSpending,
+    taxConfig,
+  );
   const hasInvestments = invested > 0 || annual401kContribution > 0;
   const wealth = cash + invested;
   const end =
@@ -551,7 +620,7 @@ function GuidedSetup(
         tax_config_id: draft.tax_config_id,
       });
       localStorage.removeItem(key);
-      props.onCreated(scenario);
+      props.onCreated(scenario, "plan");
     }, props.onClose);
   };
   const finish = () => {
@@ -575,7 +644,7 @@ function GuidedSetup(
       });
       const scenario = await api.scenarios.get(result.scenario_id);
       localStorage.removeItem(key);
-      props.onCreated(scenario);
+      props.onCreated(scenario, "results");
     }, props.onClose);
   };
   const onSubmit = (event: FormEvent) => {
@@ -658,14 +727,14 @@ function GuidedSetup(
       fresh: step === INCOME_STEP || (step === ASSUME_STEP && funding.length > 0),
     });
   }
-  if (draft.monthly_retirement_spending > 0) {
+  if (monthlyRetirementSpending > 0) {
     events.push({
       name: "Retirement spending",
       parts: [
         "every year from",
         retireAt,
         "· Expense of",
-        { expr: `inflation(${money(draft.monthly_retirement_spending * 12)})` },
+        { expr: `inflation(${money(monthlyRetirementSpending * 12)})` },
         "from",
         { slot: "Checking" },
         ...funding,
@@ -717,6 +786,58 @@ function GuidedSetup(
           },
         ]
       : undefined;
+
+  // The Assume step's summary: each default with where it comes from.
+  const profileDescription = (id: number) =>
+    profiles.find((profile) => profile.id === id)?.description ?? undefined;
+  const inflationProfile = props.inflationProfiles.find(
+    (profile) => profile.id === draft.inflation_profile_id,
+  );
+  const assumptionRows: { label: string; value: string; why?: string }[] = [
+    ...(hasInvestments
+      ? [
+          {
+            label: "Investment mix",
+            value: `${draft.stock_percent}% stocks, ${100 - draft.stock_percent}% bonds`,
+          },
+          {
+            label: "Stock returns",
+            value: profileName(draft.stock_profile_id) ?? "",
+            why: profileDescription(draft.stock_profile_id),
+          },
+          {
+            label: "Bond returns",
+            value: profileName(draft.bond_profile_id) ?? "",
+            why: profileDescription(draft.bond_profile_id),
+          },
+        ]
+      : []),
+    {
+      label: "Cash returns",
+      value: profileName(draft.cash_profile_id) ?? "",
+      why: profileDescription(draft.cash_profile_id),
+    },
+    {
+      label: "Inflation",
+      value: inflationProfile?.name ?? "No inflation",
+      why: inflationProfile?.description ?? undefined,
+    },
+    {
+      label: "Taxes",
+      value: taxConfig?.name ?? "No taxes modeled",
+      why: taxConfig?.description ?? undefined,
+    },
+    ...(hasInvestments
+      ? [
+          {
+            label: "When checking runs short",
+            value: draft.fund_from_investments
+              ? "Withdraw from savings, in a tax-aware order"
+              : "Checking only; investments are not withdrawn",
+          },
+        ]
+      : []),
+  ];
 
   const age = draft.birth_date && draft.start_date >= draft.birth_date
     ? Math.floor(yearsBetween(draft.birth_date, draft.start_date))
@@ -878,16 +999,24 @@ function GuidedSetup(
                 <>
                   {number("Annual gross salary until retirement", "annual_income", undefined, true)}
                   {number("Monthly spending before retirement", "monthly_spending", undefined, true)}
-                  {number(
-                    "Monthly spending in retirement",
-                    "monthly_retirement_spending",
-                    undefined,
-                    true,
-                  )}
+                  <RangeField
+                    label={`Spending in retirement — ${draft.retirement_spending_percent}% of today's${
+                      draft.monthly_spending > 0 ? `, ${money(monthlyRetirementSpending)}/month` : ""
+                    }`}
+                    min={50}
+                    max={150}
+                    step={5}
+                    value={draft.retirement_spending_percent}
+                    onValueChange={(retirement_spending_percent) =>
+                      patch({ retirement_spending_percent })
+                    }
+                  />
                   <p className="ns-mut">
-                    Spending is entered per month and modeled as a yearly expense. Salary stops at
-                    age {draft.retirement_age}; retirement spending replaces working-year spending.
+                    Many retirees spend 70–100% of what they spent while working, so the plan starts
+                    at {DEFAULT_RETIREMENT_SPENDING_PERCENT}%. Salary stops at age{" "}
+                    {draft.retirement_age}; retirement spending replaces working-year spending.
                   </p>
+                  <TakeHomeLine year={firstYear} taxName={taxConfig?.name} />
                 </>
               )}
 
@@ -927,12 +1056,37 @@ function GuidedSetup(
                         Capped at $24,500, the 2026 basic employee-deferral limit. This starter does
                         not add employer matching or age-based catch-up contributions.
                       </p>
+                      <TakeHomeLine year={firstYear} taxName={taxConfig?.name} />
                     </>
                   )}
                 </>
               )}
 
-              {step === 6 && (
+              {step === 6 && !customizing && !stepProblem(6) && (
+                <>
+                  <section className="ns-assume" aria-label="Assumptions">
+                    {assumptionRows.map((row) => (
+                      <div key={row.label} className="ns-assume-row">
+                        <span className="ns-lbl">{row.label}</span>
+                        <span>
+                          {row.value}
+                          {row.why && <span className="ns-mut"> · {row.why}</span>}
+                        </span>
+                      </div>
+                    ))}
+                  </section>
+                  <Button className="ns-assume-change" onClick={() => setCustomizing(true)}>
+                    Change assumptions
+                  </Button>
+                  <p className="ns-mut">
+                    Returns are randomized around these historical averages in every simulation, so
+                    the results show good and bad markets, not one guess. Rates are simplified and
+                    do not cover every deduction, benefit, or jurisdiction.
+                  </p>
+                </>
+              )}
+
+              {step === 6 && (customizing || stepProblem(6)) && (
                 <>
                   {choice("Cash return assumption", "cash_profile_id")}
                   {hasInvestments && (
@@ -1028,8 +1182,9 @@ function GuidedSetup(
                     </p>
                   )}
                   <p>
-                    Annual gross salary ${draft.annual_income.toLocaleString()}; monthly spending ${draft.monthly_spending.toLocaleString()} before retirement and ${draft.monthly_retirement_spending.toLocaleString()} after.
+                    Annual gross salary ${draft.annual_income.toLocaleString()}; monthly spending ${draft.monthly_spending.toLocaleString()} before retirement and {money(monthlyRetirementSpending)} after ({draft.retirement_spending_percent}%).
                   </p>
+                  <TakeHomeLine year={firstYear} taxName={taxConfig?.name} />
                   {annual401kContribution > 0 && (
                     <p>
                       401(k) contribution: {contributionPercent}% of gross salary, ${annual401kContribution.toLocaleString()} per year at the starting salary.
@@ -1040,7 +1195,7 @@ function GuidedSetup(
                       ? "Checking, then withdraw from savings for both working and retirement spending"
                       : "Checking only; investments do not automatically fund spending"}.
                   </p>
-                  {(!draft.monthly_spending || !draft.monthly_retirement_spending) && (
+                  {(!draft.monthly_spending || !monthlyRetirementSpending) && (
                     <p role="alert">Some years have no spending. Confirm that this is intentional.</p>
                   )}
                   <label style={{ display: "inline-flex", alignItems: "flex-start", gap: 8, fontSize: 13.5 }}>

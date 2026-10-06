@@ -800,9 +800,9 @@ function Workbench({
               // A draft started here spent one of the month's drafts.
               access.reload();
             }}
-            onCreated={(created) => {
+            onCreated={(created, nextTab) => {
               setRecentlyCreated(created);
-              nav.openScenario(created.slug, "plan");
+              nav.openScenario(created.slug, nextTab);
               scenarios.reload();
             }}
             onDraftCreated={(created) => {
