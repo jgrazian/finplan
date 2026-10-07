@@ -225,11 +225,23 @@ A dollar in a 401(k) is not a dollar in a Roth: the heir, or the owner's later
 withdrawals, pay tax on it. Compared on pre-tax ending balance, a conversion
 always looks worse, since it pays tax now and shrinks the total. So:
 
-- **Plan setting** `deferred_tax_rate` (default 24%): the rate applied to
-  tax-deferred balances when valuing the plan after tax. Stored on the scenario,
-  edited beside the tax config.
-- **`after_tax_ending_balance`** = taxable + tax-free + bank + property − debt +
-  tax-deferred × (1 − rate). Reported per path, in the Drawdown summary and
+- **The tax still owed** (`SimulationResult::deferred_exit_tax`), worked out by
+  each path when it ends, from the plan's own numbers. Nobody pays it in one
+  year: most heirs must empty an inherited IRA within ten years (SECURE Act),
+  and an owner spends one down over about as long. So the ending tax-deferred
+  balance is withdrawn evenly over ten years, each year's tenth stacked on the
+  plan's last full year of ordinary income and taxed like any tax-deferred
+  withdrawal: that year's indexed federal brackets with its deduction, plus the
+  flat state rate. The tenth is held level, as if the account grew with the
+  inflation the brackets are indexed to. The plan's own income stands in for
+  the heir's, which it cannot know. A small IRA comes out near the bottom
+  brackets; a large one climbs them.
+  (This replaced a flat `deferred_tax_rate` plan setting, default 24%, in
+  model 0.14.0; migration `0030` drops the column, and an archive or client
+  that still sends it is ignored.)
+- **`after_tax_ending_balance`** = final net worth − the tax still owed: taxable
+  (stepped up at death), tax-free, bank, property and debt count at their
+  value. Reported per path, in the Drawdown summary and
   comparison rows (median over iterations, nominal and real), and as an
   `AnalysisMetric` so sweeps and solve can target it.
 - **The comparison strip** shows after-tax ending balance as its headline
@@ -497,9 +509,9 @@ Dec 30 conversion lowers the next year's RMD and a Dec 31 one does not.
   create-event route.
 
 **Part 3, after-tax ending balance and Drawdown.**
-- `deferred_tax_rate` is a field of `UpdateScenario` (`PATCH
-  /scenarios/{id}`), not its own edit. At the 0.24 default it is left out of
-  the snapshot, so existing plans keep their input hash.
+- The tax still owed is computed in `SimulationState::deferred_exit_tax` from
+  the final wealth snapshot, so it needs no input of its own and no snapshot
+  field.
 - The overlay pays tax from the largest bank when there is no taxable account,
   and withholds only when there is neither. The toggle is also unavailable
   without a tax-deferred account.

@@ -7,8 +7,6 @@
 //! alike), a name no other plan of the user's has, and any limit on how many
 //! plans there may be.
 
-use finplan_core::config::DEFAULT_DEFERRED_TAX_RATE;
-
 use crate::error::{PlanError, PlanResult};
 use crate::graph::{ScenarioGraph, ScenarioRow};
 use crate::library::Library;
@@ -70,7 +68,6 @@ pub fn new_plan(
         collect_ledger: 1,
         funding_strategy: None,
         funding_bracket_ceiling: None,
-        deferred_tax_rate: DEFAULT_DEFERRED_TAX_RATE,
         created_at: now.to_string(),
         updated_at: now.to_string(),
     });
@@ -155,7 +152,6 @@ pub fn library_view(library: &Library) -> ScenarioGraph {
         collect_ledger: 0,
         funding_strategy: None,
         funding_bracket_ceiling: None,
-        deferred_tax_rate: DEFAULT_DEFERRED_TAX_RATE,
         created_at: String::new(),
         updated_at: String::new(),
     });

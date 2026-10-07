@@ -9,9 +9,9 @@ use crate::error::SimulationError;
 use crate::evaluate::evaluate_effect_into;
 use crate::metrics::{InstrumentationConfig, SimulationMetrics};
 use crate::model::{
-    AccountFlavor, AccountId, AmountMode, AssetId, AssetLot, CashFlowKind, ConvergenceMetric,
-    EventEffect, EventTrigger, IncomeType, LedgerEntry, LoanDetail, LotMethod, MeanAccumulators,
-    MonteCarloConfig, MonteCarloProgress, MonteCarloStats, MonteCarloSummary,
+    AccountFlavor, AccountId, AccountSnapshot, AmountMode, AssetId, AssetLot, CashFlowKind,
+    ConvergenceMetric, EventEffect, EventTrigger, IncomeType, LedgerEntry, LoanDetail, LotMethod,
+    MeanAccumulators, MonteCarloConfig, MonteCarloProgress, MonteCarloStats, MonteCarloSummary,
     MonthlyCashFlowSummary, SimulationResult, SimulationWarning, StateEvent, TaxStatus,
     TaxedIncome, TransferAmount, WarningKind, WithdrawalSources, YearlyCashFlowSummary,
     after_tax_final_net_worth, final_net_worth,
@@ -227,6 +227,25 @@ pub fn build_monthly_cash_flows(ledger: &[LedgerEntry]) -> Vec<MonthlyCashFlowSu
 fn build_simulation_result(state: &mut SimulationState) -> SimulationResult {
     let yearly_cash_flows = build_yearly_cash_flows(&state.history.ledger);
     let cumulative_inflation = state.portfolio.market.get_cumulative_inflation_factors();
+    let deferred_balance = state
+        .portfolio
+        .wealth_snapshots
+        .last()
+        .map_or(0.0, |snap| {
+            snap.accounts
+                .iter()
+                .filter(|a| {
+                    state.portfolio.accounts.get(&a.account_id).is_some_and(|account| {
+                        matches!(
+                            &account.flavor,
+                            AccountFlavor::Investment(inv) if inv.tax_status == TaxStatus::TaxDeferred
+                        )
+                    })
+                })
+                .map(AccountSnapshot::total_value)
+                .sum()
+        });
+    let deferred_exit_tax = state.deferred_exit_tax(deferred_balance);
 
     let mut result = SimulationResult {
         wealth_snapshots: std::mem::take(&mut state.portfolio.wealth_snapshots),
@@ -236,6 +255,7 @@ fn build_simulation_result(state: &mut SimulationState) -> SimulationResult {
         warnings: std::mem::take(&mut state.warnings),
         cumulative_inflation,
         diagnostics: std::mem::take(&mut state.diagnostics),
+        deferred_exit_tax,
     };
     let mut diagnostics = std::mem::take(&mut result.diagnostics);
     diagnostics.observe_snapshots(&result);
@@ -1107,8 +1127,6 @@ pub struct BatchOutput {
 pub struct PreparedRun {
     /// The plan with the ledger off. Funding checks and warnings still run.
     batch_params: SimulationConfig,
-    /// The plan's tax-deferred accounts, for each path's after-tax value.
-    tax_deferred: Vec<AccountId>,
     /// An empty real-wealth accumulator on the plan's date grid; each batch
     /// starts from a copy. `None` when real quantiles are not wanted.
     real_template: Option<RealAccumulator>,
@@ -1166,7 +1184,6 @@ pub fn prepare_run_with(
     let mut batch_params = params.clone();
     batch_params.collect_ledger = false;
     Ok(PreparedRun {
-        tax_deferred: batch_params.tax_deferred_accounts(),
         batch_params,
         real_template: collect_real.then(|| RealAccumulator::new(&template)),
         compute_means: config.compute_mean,
@@ -1246,11 +1263,7 @@ pub fn run_batch_observed(
         local_stats.add(fnw, result.warnings.is_empty());
         local_funding.add(seed, &result, fnw);
         local_results.push((seed, fnw));
-        local_after_tax.push(after_tax_final_net_worth(
-            &result,
-            &prepared.tax_deferred,
-            prepared.batch_params.deferred_tax_rate,
-        ));
+        local_after_tax.push(after_tax_final_net_worth(&result));
 
         if prepared.compute_means {
             if let Some(ref mut acc) = local_acc {

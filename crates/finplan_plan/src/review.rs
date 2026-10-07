@@ -32,7 +32,8 @@ pub struct PreviewStats {
     pub real_final: Option<RealFinal>,
     pub funding: Option<FundingDiagnostics>,
     /// The median after-tax ending balance over all iterations, nominal:
-    /// tax-deferred balances count at one minus the plan's deferred tax rate.
+    /// less the income tax the tax-deferred balances still owe, worked out
+    /// from the plan's tax config as if withdrawn over ten years.
     /// What a Roth conversion is judged on, where success rarely moves.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]

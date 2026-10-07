@@ -414,6 +414,7 @@ fn funding_accumulator_merges_the_same_in_any_order() {
                 shortfall_years: 1,
                 liquid_depleted: None,
             },
+            deferred_exit_tax: 0.0,
         }
     };
     // Seeds 7 and 3 tie on date and deficit; the lower seed wins either way.

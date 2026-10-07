@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use finplan_core::model::{
     AccountSnapshot, AccountSnapshotFlavor, CashFlowKind, SimulationResult, StateEvent,
-    WealthSnapshot,
+    WealthSnapshot, after_tax_final_net_worth,
 };
 use finplan_core::simulation::simulate;
 
@@ -222,7 +222,7 @@ fn fold(compiled: &CompiledScenario, result: &SimulationResult, from_year: i64) 
     }
 
     let ending_balance: f64 = last.accounts.iter().map(AccountSnapshot::total_value).sum();
-    let after_tax_ending_balance = compiled.config.after_tax_final_net_worth(result);
+    let after_tax_ending_balance = after_tax_final_net_worth(result);
     let inflation = rows.values().last().map_or(1.0, |r| r.inflation);
     Folded {
         years: rows.into_values().collect(),

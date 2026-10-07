@@ -43,8 +43,8 @@ pub enum ObjectiveRequest {
     MaxMedianNetWorth,
     /// The highest 5th-percentile terminal net worth: the best floor.
     MaxFloorNetWorth,
-    /// The highest median after-tax terminal net worth: tax-deferred balances
-    /// count net of the plan's deferred tax rate.
+    /// The highest median after-tax terminal net worth: less the income tax
+    /// the tax-deferred balances still owe.
     MaxMedianAfterTax,
 }
 

@@ -25,6 +25,7 @@ fn fixture(values: [f64; 3], inflation: f64) -> SimulationResult {
         ledger: vec![],
         warnings: vec![],
         diagnostics: PathDiagnostics::default(),
+        deferred_exit_tax: 0.0,
     }
 }
 

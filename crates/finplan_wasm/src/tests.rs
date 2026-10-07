@@ -251,17 +251,9 @@ fn refusals_carry_the_servers_status_code_and_body() {
 }
 
 #[test]
-fn the_deferred_tax_rate_is_an_edit_and_a_read() {
+fn the_retired_deferred_tax_rate_is_ignored_locally_too() {
     let library = ok(plans::library_seed_json());
     let graph = new_plan(&library);
-    let set = |graph: &str, rate: Value| {
-        plans::apply_edit_json(
-            graph,
-            &library,
-            &json!({"op": "update_scenario", "body": {"deferred_tax_rate": rate}}).to_string(),
-            None,
-        )
-    };
     let read = |graph: &str| {
         value(&ok(reads::read_json(
             graph,
@@ -269,12 +261,17 @@ fn the_deferred_tax_rate_is_an_edit_and_a_read() {
             &json!({"query": "scenario"}).to_string(),
         )))
     };
-    assert_eq!(read(&graph)["deferred_tax_rate"], 0.24);
-    let set_to = value(&ok(set(&graph, json!(0.3))))["graph"].to_string();
-    assert_eq!(read(&set_to)["deferred_tax_rate"], 0.3);
-
-    // Refused with the status the server answers.
-    assert_eq!(set(&graph, json!(1.5)).unwrap_err().status, 400);
+    assert!(read(&graph).get("deferred_tax_rate").is_none());
+    // A tab running the old app still sends it; the edit goes through.
+    let edited = value(&ok(plans::apply_edit_json(
+        &graph,
+        &library,
+        &json!({"op": "update_scenario", "body": {"deferred_tax_rate": 0.3, "description": "x"}})
+            .to_string(),
+        None,
+    )))["graph"]
+        .to_string();
+    assert_eq!(read(&edited)["description"], "x");
 }
 
 #[test]

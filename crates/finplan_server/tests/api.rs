@@ -673,13 +673,27 @@ async fn registration_seeds_a_usable_library() {
         "new users should get a starter return-profile library"
     );
 
+    // Single and Joint Household, listed by name.
     let (_, taxes) = app.get("/api/tax-configs").await;
-    let brackets = taxes[0]["federal_brackets"].as_array().unwrap();
-    assert_eq!(brackets.len(), 7);
-    assert_eq!(brackets[0]["threshold"], 0.0);
-    // The 2024 single deduction goes with the 2024 single brackets.
-    assert_eq!(taxes[0]["standard_deduction"], 14_600.0);
-    assert_eq!(taxes[0]["age_65_extra_deduction"], 1_950.0);
+    let names: Vec<&str> = taxes
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["Joint Household", "Single"]);
+    for (config, deduction, extra, niit) in [
+        (&taxes[1], 14_600.0, 1_950.0, 200_000.0),
+        (&taxes[0], 29_200.0, 3_100.0, 250_000.0),
+    ] {
+        let brackets = config["federal_brackets"].as_array().unwrap();
+        assert_eq!(brackets.len(), 7);
+        assert_eq!(brackets[0]["threshold"], 0.0);
+        // The 2024 deduction goes with the 2024 brackets of the same status.
+        assert_eq!(config["standard_deduction"], deduction);
+        assert_eq!(config["age_65_extra_deduction"], extra);
+        assert_eq!(config["niit_threshold"], niit);
+    }
 }
 
 #[tokio::test]
@@ -1331,16 +1345,22 @@ async fn a_tax_configs_gains_schedule_and_niit_round_trip() {
     let mut app = TestApp::new().await;
     app.login_as("gains@example.com").await;
 
-    // The seeded config carries the 2024 single schedule.
+    // The seeded single config carries the 2024 single schedule.
     let (_, taxes) = app.get("/api/tax-configs").await;
+    let single = taxes
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["name"] == "Single")
+        .unwrap();
     assert_eq!(
-        taxes[0]["capital_gains_brackets"],
+        single["capital_gains_brackets"],
         json!([{"threshold": 0.0, "rate": 0.0}, {"threshold": 47025.0, "rate": 0.15},
                {"threshold": 518900.0, "rate": 0.2}])
     );
-    assert_eq!(taxes[0]["niit_threshold"], Value::Null);
+    assert_eq!(single["niit_threshold"], 200000.0);
 
-    let path = format!("/api/tax-configs/{}", taxes[0]["id"]);
+    let path = format!("/api/tax-configs/{}", single["id"]);
     let (status, updated) = app
         .patch(
             &path,

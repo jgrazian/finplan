@@ -12,6 +12,7 @@ import { Button } from "./Button";
  */
 export function Dialog({
   title,
+  aside,
   onClose,
   onSubmit,
   submitLabel,
@@ -22,6 +23,8 @@ export function Dialog({
   children,
 }: {
   title: string;
+  /** Beside the title, on its baseline: a line about the whole dialog, a Close. */
+  aside?: ReactNode;
   onClose: () => void;
   onSubmit: () => void;
   submitLabel?: string;
@@ -88,7 +91,14 @@ export function Dialog({
           gap: 12,
         }}
       >
-        <h4 style={{ margin: 0 }}>{title}</h4>
+        {aside ? (
+          <div style={{ display: "flex", alignItems: "baseline", flexWrap: "wrap", gap: "4px 12px" }}>
+            <h4 style={{ margin: 0 }}>{title}</h4>
+            {aside}
+          </div>
+        ) : (
+          <h4 style={{ margin: 0 }}>{title}</h4>
+        )}
         {children}
 
         {error && (

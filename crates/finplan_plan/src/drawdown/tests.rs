@@ -598,17 +598,9 @@ fn cash_withdrawn_from_an_account_is_attributed_to_it() {
     );
 }
 
-fn set_deferred_tax_rate(graph: &mut ScenarioGraph, rate: f64) {
-    make(
-        graph,
-        json!({"op": "update_scenario", "body": {"deferred_tax_rate": rate}}),
-    );
-}
-
 #[test]
 fn the_summary_values_tax_deferred_money_after_tax() {
     let graph = default_graph();
-    assert_eq!(graph.scenario.deferred_tax_rate, 0.24);
     let body = project(&graph, SEED, &DrawdownRequest::default()).unwrap();
     let deferred: Vec<usize> = body
         .accounts
@@ -624,28 +616,21 @@ fn the_summary_values_tax_deferred_money_after_tax() {
         let last = choice.years.last().unwrap();
         let pre_tax: f64 = deferred.iter().map(|i| last.balances[*i]).sum();
         left_some |= pre_tax > 1.0;
-        assert!(
-            (s.after_tax_ending_balance - (s.ending_balance - 0.24 * pre_tax)).abs() < 1.0,
-            "{:?}",
-            choice.choice
-        );
+        let owed = s.ending_balance - s.after_tax_ending_balance;
+        if pre_tax > 1.0 {
+            // The plan's own brackets and state rate: more than the 5% state
+            // rate alone, less than the top 37% plus it.
+            let rate = owed / pre_tax;
+            assert!((0.05..0.42).contains(&rate), "{rate} {:?}", choice.choice);
+        } else {
+            assert!(owed.abs() < 1e-6, "{:?}", choice.choice);
+        }
         assert!(
             (s.after_tax_ending_balance_real - s.after_tax_ending_balance / last.inflation).abs()
                 < 1e-6
         );
     }
     assert!(left_some, "some strategy ends with pre-tax money");
-
-    // At 0% a tax-deferred dollar is a dollar.
-    let mut untaxed = default_graph();
-    set_deferred_tax_rate(&mut untaxed, 0.0);
-    let body = project(&untaxed, SEED, &DrawdownRequest::default()).unwrap();
-    for choice in &body.choices {
-        assert_eq!(
-            choice.summary.after_tax_ending_balance,
-            choice.summary.ending_balance
-        );
-    }
 }
 
 #[test]
@@ -674,18 +659,6 @@ fn comparison_rows_carry_the_after_tax_median() {
         let real = row.median_after_tax_ending_balance_real.unwrap();
         let factor = row.median_final_net_worth / row.median_final_net_worth_real.unwrap();
         assert!((real * factor - row.median_after_tax_ending_balance).abs() < 1e-3);
-    }
-
-    set_deferred_tax_rate(&mut graph, 0.0);
-    let untaxed = compare(&graph, &body, &mut Sequential).unwrap();
-    for (row, before) in untaxed.rows.iter().zip(&taxed.rows) {
-        assert_eq!(
-            row.median_after_tax_ending_balance,
-            row.median_final_net_worth
-        );
-        // The rate values the end of a run; it never changes how one plays.
-        assert_eq!(row.median_final_net_worth, before.median_final_net_worth);
-        assert_eq!(row.success_rate, before.success_rate);
     }
 }
 

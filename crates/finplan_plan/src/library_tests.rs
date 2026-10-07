@@ -30,9 +30,19 @@ fn the_starter_library_is_what_the_server_has_always_seeded() {
     let library = seed();
     assert_eq!(library.return_profiles.len(), 8);
     assert_eq!(library.inflation_profiles.len(), 2);
-    assert_eq!(library.tax_configs.len(), 1);
+    assert_eq!(library.tax_configs.len(), 2);
     assert_eq!(library.distributions.len(), 10);
-    assert_eq!(library.tax_configs[0].federal_brackets.len(), 7);
+    assert_eq!(library.tax_configs[0].name, SINGLE);
+    assert_eq!(library.tax_configs[1].name, JOINT_HOUSEHOLD);
+    for config in &library.tax_configs {
+        assert_eq!(config.federal_brackets.len(), 7);
+        assert_eq!(config.capital_gains_brackets.len(), 3);
+        crate::specs::taxes::validate_brackets(
+            crate::specs::taxes::FEDERAL,
+            &config.federal_brackets,
+        )
+        .unwrap();
+    }
     assert_eq!(
         library.return_profile_order().first().map(|id| library
             .return_profiles
@@ -84,7 +94,7 @@ fn a_new_plan_is_an_empty_scenario_on_the_library() {
     assert!(bare.tax_config.is_none() && bare.inflation_distribution_id.is_none());
 
     for body in [
-        json!({"name": "A", "start_date": "2026-01-01", "tax_config_id": 2}),
+        json!({"name": "A", "start_date": "2026-01-01", "tax_config_id": 3}),
         json!({"name": "A", "start_date": "2026-01-01", "inflation_profile_id": 3}),
     ] {
         let err = new_plan(&scenario(body), &library, 1, "now").unwrap_err();

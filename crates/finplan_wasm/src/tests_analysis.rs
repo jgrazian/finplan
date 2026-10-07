@@ -108,12 +108,12 @@ fn an_imported_plan_brings_its_assumptions_into_the_library() {
     // The starter inflation profile is already there, by name and by value:
     // used, not copied.
     assert_eq!(grew("inflation_profiles"), 0);
-    // The snapshot's tax config predates standard deductions, so it is not the
-    // starter one despite the name: added beside it, tagged, never substituted.
+    // The snapshot's tax config matches no starter one, so it is added beside
+    // them, never substituted. Its name is free, so it keeps it untagged.
     assert_eq!(grew("tax_configs"), 1);
     assert_eq!(
         after["tax_configs"].as_array().unwrap().last().unwrap()["name"],
-        "US Federal 2024 (single) [ab12cd34]"
+        "US Federal 2024 (single)"
     );
     assert!(grew("return_profiles") >= 1);
     assert!(grew("distributions") >= 1);

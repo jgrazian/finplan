@@ -20,8 +20,8 @@ pub enum AnalysisMetric {
     MaxDrawdown,
     /// Safe withdrawal rate achieving a target success rate
     SafeWithdrawalRate { target_success_rate: f64 },
-    /// Median final net worth with tax-deferred balances valued after the
-    /// plan's `deferred_tax_rate`
+    /// Median final net worth less the income tax its tax-deferred balances
+    /// still owe (`SimulationResult::deferred_exit_tax`)
     AfterTaxEndingBalance,
 }
 

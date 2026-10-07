@@ -31,6 +31,7 @@ import {
   type PreviewEvent,
   type PreviewParameter,
 } from "./SetupPreview";
+import { defaultTaxConfig } from "@/lib/view/assumptions";
 
 /** The step strip's short names, then each step's question and lead. */
 const steps = [
@@ -415,7 +416,7 @@ function GuidedSetup(
       monthly_spending: 0,
       retirement_spending_percent: DEFAULT_RETIREMENT_SPENDING_PERCENT,
       inflation_profile_id: props.inflationProfiles[0]?.id ?? null,
-      tax_config_id: props.taxConfigs[0]?.id ?? null,
+      tax_config_id: defaultTaxConfig(props.taxConfigs)?.id ?? null,
       fund_from_investments: true,
       assumptions_confirmed: false,
       has_cash: null,

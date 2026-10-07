@@ -58,8 +58,8 @@ pub struct AnalysisPoint {
     pub p5: f64,
     pub p50: f64,
     pub p95: f64,
-    /// Median after-tax terminal net worth, nominal: tax-deferred balances
-    /// net of the plan's `deferred_tax_rate`. Absent where the run predates it.
+    /// Median after-tax terminal net worth, nominal: less the income tax the
+    /// tax-deferred balances still owe. Absent where the run predates it.
     #[serde(default)]
     #[ts(optional = nullable)]
     pub after_tax_p50: Option<f64>,

@@ -22,8 +22,8 @@ export type SweepCell = {
   p50: number;
   p95: number;
   /**
-   * Median after-tax terminal net worth, nominal: tax-deferred balances
-   * net of the plan's `deferred_tax_rate`. Absent where the run predates it.
+   * Median after-tax terminal net worth, nominal: less the income tax the
+   * tax-deferred balances still owe. Absent where the run predates it.
    */
   after_tax_p50?: number | null;
 };

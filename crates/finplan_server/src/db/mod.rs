@@ -625,6 +625,81 @@ mod tests {
         );
     }
 
+    /// Migration 0029 gives every user with a tax library the seeded "Joint
+    /// Household" config, and leaves alone a user without one, a user who
+    /// already has one by that name, and every existing config.
+    #[tokio::test]
+    async fn the_joint_household_migration_adds_one_config_per_library() {
+        let mut conn = SqliteConnection::connect_with(
+            &SqliteConnectOptions::new()
+                .in_memory(true)
+                .foreign_keys(true),
+        )
+        .await
+        .unwrap();
+        apply(&mut conn, 0, 28).await;
+        for sql in [
+            "INSERT INTO users(id,email,password_hash) VALUES('u','u@example.com','h')",
+            "INSERT INTO tax_configs(id,user_id,name) VALUES(1,'u','US Federal 2024 (single)')",
+            "INSERT INTO tax_brackets(tax_config_id,threshold,rate) VALUES(1,0,0.10)",
+            "INSERT INTO tax_gain_brackets(tax_config_id,threshold,rate) VALUES(1,0,0.15)",
+            // Deleted the seeded config: no library to add to.
+            "INSERT INTO users(id,email,password_hash) VALUES('v','v@example.com','h')",
+            // Already made their own.
+            "INSERT INTO users(id,email,password_hash) VALUES('w','w@example.com','h')",
+            "INSERT INTO tax_configs(id,user_id,name,state_rate) VALUES(2,'w','Joint Household',0.09)",
+            "INSERT INTO tax_brackets(tax_config_id,threshold,rate) VALUES(2,0,0.20)",
+            "INSERT INTO tax_gain_brackets(tax_config_id,threshold,rate) VALUES(2,0,0.10)",
+        ] {
+            sqlx::query(sql).execute(&mut conn).await.unwrap();
+        }
+
+        apply(&mut conn, 28, 29).await;
+
+        let joint: Vec<(i64, String, f64, f64, Option<f64>)> = sqlx::query_as(
+            "SELECT id, user_id, state_rate, standard_deduction, niit_threshold
+               FROM tax_configs WHERE name = 'Joint Household' ORDER BY user_id",
+        )
+        .fetch_all(&mut conn)
+        .await
+        .unwrap();
+        assert_eq!(joint.len(), 2, "one for u, w's own kept, none for v");
+        let (added, user, _, deduction, niit) = joint[0].clone();
+        assert_eq!(
+            (user.as_str(), deduction, niit),
+            ("u", 29_200.0, Some(250_000.0))
+        );
+        assert_eq!(
+            (joint[1].0, joint[1].2),
+            (2, 0.09),
+            "w's config is untouched"
+        );
+
+        let federal: Vec<(f64, f64)> = sqlx::query_as(
+            "SELECT threshold, rate FROM tax_brackets WHERE tax_config_id = ?1 ORDER BY threshold",
+        )
+        .bind(added)
+        .fetch_all(&mut conn)
+        .await
+        .unwrap();
+        assert_eq!(federal.len(), 7);
+        assert_eq!(federal[1], (23_200.0, 0.12));
+        let gains: Vec<(f64, f64)> = sqlx::query_as(
+            "SELECT threshold, rate FROM tax_gain_brackets WHERE tax_config_id = ?1 ORDER BY threshold",
+        )
+        .bind(added)
+        .fetch_all(&mut conn)
+        .await
+        .unwrap();
+        assert_eq!(gains, vec![(0.0, 0.0), (94_050.0, 0.15), (583_750.0, 0.20)]);
+        let kept: Vec<(f64, f64)> =
+            sqlx::query_as("SELECT threshold, rate FROM tax_brackets WHERE tax_config_id = 2")
+                .fetch_all(&mut conn)
+                .await
+                .unwrap();
+        assert_eq!(kept, vec![(0.0, 0.20)]);
+    }
+
     /// Apply migrations `from < version <= to`, each in a transaction as the
     /// real migrator does.
     async fn apply(conn: &mut SqliteConnection, from: i64, to: i64) {

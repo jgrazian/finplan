@@ -1044,26 +1044,22 @@ pub fn seed() -> Library {
         });
     }
 
-    // 2024 US federal brackets, single filer.
+    // 2024 US federal tables for the two common filing statuses. Single is
+    // first, so it keeps id 1 and stays what a new plan is pointed at.
     library.tax_configs.push(LibraryTaxConfig {
         id: 1,
-        name: "US Federal 2024 (single)".to_string(),
+        name: SINGLE.to_string(),
         description: Some(
-            "2024 federal and capital gains brackets and standard deduction, 5% state".to_string(),
+            "2024 single filer: federal and capital gains brackets, standard deduction, NIIT, 5% state"
+                .to_string(),
         ),
         state_rate: 0.05,
         early_withdrawal_penalty_rate: 0.10,
         standard_deduction: 14_600.0,
         age_65_extra_deduction: 1_950.0,
-        niit_threshold: None,
-        capital_gains_brackets: finplan_core::model::TaxConfig::us_2024_single_gains_brackets()
-            .into_iter()
-            .map(|b| Bracket {
-                threshold: b.threshold,
-                rate: b.rate,
-            })
-            .collect(),
-        federal_brackets: [
+        niit_threshold: Some(200_000.0),
+        capital_gains_brackets: brackets(&[(0.0, 0.0), (47_025.0, 0.15), (518_900.0, 0.20)]),
+        federal_brackets: brackets(&[
             (0.0, 0.10),
             (11_600.0, 0.12),
             (47_150.0, 0.22),
@@ -1071,13 +1067,45 @@ pub fn seed() -> Library {
             (191_950.0, 0.32),
             (243_725.0, 0.35),
             (609_350.0, 0.37),
-        ]
-        .into_iter()
-        .map(|(threshold, rate)| Bracket { threshold, rate })
-        .collect(),
+        ]),
+    });
+    library.tax_configs.push(LibraryTaxConfig {
+        id: 2,
+        name: JOINT_HOUSEHOLD.to_string(),
+        description: Some(
+            "2024 married filing jointly: federal and capital gains brackets, standard deduction, NIIT, 5% state"
+                .to_string(),
+        ),
+        state_rate: 0.05,
+        early_withdrawal_penalty_rate: 0.10,
+        standard_deduction: 29_200.0,
+        // $1,550 for each spouse.
+        age_65_extra_deduction: 3_100.0,
+        niit_threshold: Some(250_000.0),
+        capital_gains_brackets: brackets(&[(0.0, 0.0), (94_050.0, 0.15), (583_750.0, 0.20)]),
+        federal_brackets: brackets(&[
+            (0.0, 0.10),
+            (23_200.0, 0.12),
+            (94_300.0, 0.22),
+            (201_050.0, 0.24),
+            (383_900.0, 0.32),
+            (487_450.0, 0.35),
+            (731_200.0, 0.37),
+        ]),
     });
 
     library
+}
+
+/// The seeded single-filer tax config's name.
+pub const SINGLE: &str = "Single";
+/// The seeded married-filing-jointly tax config's name.
+pub const JOINT_HOUSEHOLD: &str = "Joint Household";
+
+fn brackets(rows: &[(f64, f64)]) -> Vec<Bracket> {
+    rows.iter()
+        .map(|&(threshold, rate)| Bracket { threshold, rate })
+        .collect()
 }
 
 #[cfg(test)]

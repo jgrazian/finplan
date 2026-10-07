@@ -68,3 +68,12 @@ export function toTaxChoices(configs: TaxConfig[]): AssumptionChoice[] {
     };
   });
 }
+
+/**
+ * The tax config a new plan starts on: the oldest in the library. The list is
+ * sorted by name, which would put "Joint Household" ahead of the "Single" the
+ * library was seeded with first.
+ */
+export function defaultTaxConfig(configs: TaxConfig[]): TaxConfig | undefined {
+  return configs.reduce<TaxConfig | undefined>((first, c) => (first && first.id < c.id ? first : c), undefined);
+}

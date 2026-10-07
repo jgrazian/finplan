@@ -31,9 +31,4 @@ export type Scenario = {
    * JSON column (`SCENARIO_COLUMNS`).
    */
   funding: FundingPolicySpec | null;
-  /**
-   * The rate tax-deferred balances are valued at when the plan is valued
-   * after tax (after-tax ending balance), as a fraction.
-   */
-  deferred_tax_rate: number;
 };

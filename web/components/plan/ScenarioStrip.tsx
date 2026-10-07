@@ -13,10 +13,12 @@ type Editable =
   | "durationYears"
   | "birthDate"
   | "inflationProfileId"
-  | "taxConfigId"
-  | "deferredTaxRate";
+  | "taxConfigId";
 
 const MUTED = "color-mix(in srgb, var(--color-text) 58%, transparent)";
+
+/** The tax picker's "New tax config…" row; no config has this id. */
+const NEW_TAX_CONFIG = -1;
 
 /**
  * Artboard 10a — the scenario as a single line above the plan.
@@ -39,6 +41,8 @@ export function ScenarioStrip({
   assumptions,
   onChange,
   onDelete,
+  onEditTaxConfig,
+  onNewTaxConfig,
   offline,
 }: {
   params: ScenarioParams;
@@ -48,6 +52,10 @@ export function ScenarioStrip({
   onChange?: (patch: Partial<ScenarioParams>) => Promise<void>;
   /** Asks to delete the scenario; absent, the fields offer no delete. */
   onDelete?: () => void;
+  /** Opens the tax config editor on the chosen config (canvas 1a). */
+  onEditTaxConfig?: (id: number) => void;
+  /** Opens the editor on a new config, from the foot of the tax picker. */
+  onNewTaxConfig?: () => void;
   /** No connection: the fields are read-only rather than held for later. */
   offline?: boolean;
 }) {
@@ -190,10 +198,10 @@ export function ScenarioStrip({
           style={{
             padding: "0 20px 14px",
             display: "grid",
-            // The three dates and the rate are short and the two assumption
-            // names are not, so the pickers get the room rather than an even
-            // sixth each.
-            gridTemplateColumns: "0.85fr 0.7fr 0.85fr 1.3fr 1.3fr 0.75fr",
+            // The three dates are short and the two assumption names are not,
+            // so the pickers get the room rather than an even fifth each. The
+            // rate on pre-tax money is edited with the tax config, in its dialog.
+            gridTemplateColumns: "0.85fr 0.7fr 0.85fr 1.3fr 1.3fr",
             gap: 12,
             alignItems: "start",
           }}
@@ -284,12 +292,38 @@ export function ScenarioStrip({
           </Field>
 
           <Field
-            label="Tax config"
+            label={
+              <span style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
+                Tax config
+                {!readOnly && onEditTaxConfig && tax && (
+                  <button
+                    type="button"
+                    onClick={() => onEditTaxConfig(tax.id)}
+                    style={{
+                      padding: 0,
+                      border: 0,
+                      background: "none",
+                      font: "inherit",
+                      fontWeight: 600,
+                      color: "var(--color-accent-700)",
+                      cursor: "pointer",
+                    }}
+                  >
+                    Edit…
+                  </button>
+                )}
+              </span>
+            }
             className={refused.taxConfigId ? "field-unsaved" : undefined}
           >
             <Dropdown
               className="dd-field"
-              options={options(assumptions.tax)}
+              options={[
+                ...options(assumptions.tax),
+                ...(onNewTaxConfig
+                  ? [{ value: NEW_TAX_CONFIG, label: "New tax config…", action: true }]
+                  : []),
+              ]}
               value={shown.taxConfigId}
               placeholder={
                 assumptions.tax.length === 0 ? "— none defined —" : "— not set —"
@@ -297,29 +331,12 @@ export function ScenarioStrip({
               ariaLabel="Tax configuration"
               disabled={readOnly}
               maxMenuHeight={300}
-              onChange={(id) => void save({ taxConfigId: id })}
+              onChange={(id) =>
+                id === NEW_TAX_CONFIG ? onNewTaxConfig?.() : void save({ taxConfigId: id })
+              }
             />
             {refused.taxConfigId && <UnsavedNote>{refused.taxConfigId}</UnsavedNote>}
             {tax && <Note>{tax.note}</Note>}
-          </Field>
-
-          <Field
-            label="Tax on pre-tax money"
-            className={refused.deferredTaxRate ? "field-unsaved" : undefined}
-          >
-            <NumberInput
-              style={{ minHeight: 30 }}
-              value={Math.round(shown.deferredTaxRate * 1000) / 10}
-              suffix="%"
-              decimals={1}
-              min={0}
-              max={99.9}
-              readOnly={readOnly}
-              aria-label="Tax rate on tax-deferred balances"
-              onCommit={(percent) => void save({ deferredTaxRate: percent / 100 })}
-            />
-            {refused.deferredTaxRate && <UnsavedNote>{refused.deferredTaxRate}</UnsavedNote>}
-            <Note>What a 401(k) or IRA dollar is assumed to owe on the way out, for after-tax ending balance.</Note>
           </Field>
 
           {!readOnly && onDelete && unsaved === 0 && (

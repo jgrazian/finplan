@@ -43,8 +43,8 @@ pub enum SolveObjective {
     /// The highest *floor*: the 5th-percentile terminal net worth. Picks the
     /// setting whose bad outcomes are least bad, rather than its typical one.
     MaxFloorNetWorth,
-    /// The highest median after-tax terminal net worth: tax-deferred balances
-    /// count net of the plan's `deferred_tax_rate`.
+    /// The highest median after-tax terminal net worth: less the income tax
+    /// the tax-deferred balances still owe.
     MaxMedianAfterTax,
 }
 

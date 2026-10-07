@@ -18,8 +18,8 @@ export type ComparisonRow = {
   median_final_net_worth_real?: number | null;
   /**
    * Median of after-tax final net worth across the iterations (ranked on
-   * its own), nominal: tax-deferred balances count net of the plan's
-   * `deferred_tax_rate`. The fair column for comparing Roth conversions.
+   * its own), nominal: less the income tax the tax-deferred balances still
+   * owe. The fair column for comparing Roth conversions.
    */
   median_after_tax_ending_balance: number;
   /**

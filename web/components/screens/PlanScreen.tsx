@@ -11,6 +11,7 @@ import {
   eventProblem,
   toEventBody,
 } from "@/components/plan";
+import { TaxConfigDialog, type TaxConfigTarget } from "@/components/plan/TaxConfigDialog";
 import { DeleteScenarioDialog } from "@/components/scenario/DeleteScenarioDialog";
 import { Button, Dialog, SegmentedControl } from "@/components/ui";
 import { usePlanApi } from "@/lib/nav";
@@ -23,6 +24,7 @@ import { useNav } from "@/lib/nav";
 import type { AssumptionChoices, PlanEvent, ScenarioParams } from "@/lib/types";
 import type { PlanAxis } from "@/lib/view/axis";
 import { ParameterEditor, ParameterRail, blankParameterValue } from "@/components/plan/Parameters";
+import { defaultTaxConfig } from "@/lib/view/assumptions";
 
 /**
  * What Add event makes: a yearly repeat that does nothing yet.
@@ -93,6 +95,7 @@ export function PlanScreen({
 }) {
   const api = usePlanApi();
   const [deletingScenario, setDeletingScenario] = useState(false);
+  const [taxTarget, setTaxTarget] = useState<TaxConfigTarget>();
   const [savedAt, setSavedAt] = useState<Map<number, number>>(new Map());
   const [lastEventId, setLastEventId] = useState<string>();
   const editing = useSubmit();
@@ -180,7 +183,6 @@ export function PlanScreen({
       body.inflation_profile_id = patch.inflationProfileId;
     }
     if (patch.taxConfigId != null) body.tax_config_id = patch.taxConfigId;
-    if (patch.deferredTaxRate != null) body.deferred_tax_rate = patch.deferredTaxRate;
     await api.scenarios.update(scenarioId, body);
     onChanged();
   };
@@ -324,6 +326,16 @@ export function PlanScreen({
         assumptions={assumptions}
         onChange={saveParams}
         onDelete={onScenarioDeleted && (() => setDeletingScenario(true))}
+        onEditTaxConfig={(id) => {
+          const config = raw.taxConfigs.find((t) => t.id === id);
+          if (config) setTaxTarget({ kind: "edit", config });
+        }}
+        onNewTaxConfig={() =>
+          setTaxTarget({
+            kind: "new",
+            from: raw.taxConfigs.find((t) => t.id === params.taxConfigId) ?? defaultTaxConfig(raw.taxConfigs),
+          })
+        }
         offline={offline}
       />
       <FundingSetting
@@ -432,6 +444,20 @@ export function PlanScreen({
         selectedId={railMode === "events" ? selected?.id ?? "" : ""}
         onSelect={selectEvent}
       />}
+
+      {taxTarget && (
+        <TaxConfigDialog
+          target={taxTarget}
+          offline={offline}
+          onClose={() => setTaxTarget(undefined)}
+          onSaved={async (config, created) => {
+            // A config made from this plan's picker is the one it wanted.
+            if (created) await api.scenarios.update(scenarioId, { tax_config_id: config.id });
+            onChanged();
+          }}
+          onDeleted={onChanged}
+        />
+      )}
 
       {deletingScenario && onScenarioDeleted && (
         <DeleteScenarioDialog

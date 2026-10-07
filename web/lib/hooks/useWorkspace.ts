@@ -10,6 +10,7 @@ import type {
   NamedParameter,
   Profile,
   Scenario as ApiScenario,
+  TaxConfig,
 } from "@/lib/api/types";
 import type {
   Account,
@@ -38,6 +39,8 @@ export interface RawWorkspace {
   events: ApiEvent[];
   parameters: NamedParameter[];
   returnProfiles: Profile[];
+  /** The home's tax library, for the Plan strip's tax config editor. */
+  taxConfigs: TaxConfig[];
 }
 
 export interface Workspace {
@@ -97,7 +100,7 @@ export function useWorkspace(scenarioId: number | undefined, planRef: string | u
         inflationProfiles: [],
         assumptions: { inflation: [], tax: [] },
         activeInflationProfile: undefined,
-        raw: { accounts: [], assets: [], events: [], parameters: [], returnProfiles: [] },
+        raw: { accounts: [], assets: [], events: [], parameters: [], returnProfiles: [], taxConfigs: [] },
         loading,
         error,
         reload,
@@ -125,7 +128,6 @@ export function useWorkspace(scenarioId: number | undefined, planRef: string | u
         inflationProfileId: scenario.inflation_profile_id,
         taxConfig: taxConfig?.name ?? "—",
         taxConfigId: scenario.tax_config_id,
-        deferredTaxRate: scenario.deferred_tax_rate,
       },
       axis,
       accounts: toViewAccounts(accounts, { assets, profiles: returnProfiles, events }),
@@ -137,7 +139,7 @@ export function useWorkspace(scenarioId: number | undefined, planRef: string | u
         tax: toTaxChoices(taxConfigs),
       },
       activeInflationProfile: inflation?.name,
-      raw: { accounts, assets, events, parameters, returnProfiles },
+      raw: { accounts, assets, events, parameters, returnProfiles, taxConfigs },
       loading,
       error,
       reload,

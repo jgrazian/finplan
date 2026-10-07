@@ -14,6 +14,7 @@ import { usePlanApi } from "@/lib/nav";
 import type { Profile, Scenario, TaxConfig, UserResponse } from "@/lib/api/types";
 import { useSubmit } from "@/lib/hooks/useSubmit";
 import { addYears, yearsBetween } from "@/lib/view/format";
+import { defaultTaxConfig } from "@/lib/view/assumptions";
 
 /**
  * Creates a scenario.
@@ -42,7 +43,7 @@ export function AdvancedScenarioDialog({
   const [birth, setBirth] = useState(defaults.birth_date ?? "");
   const [years, setYears] = useState(defaults.default_duration_years);
   const [inflationId, setInflationId] = useState(inflationProfiles[0]?.id ?? 0);
-  const [taxId, setTaxId] = useState(taxConfigs[0]?.id ?? 0);
+  const [taxId, setTaxId] = useState(defaultTaxConfig(taxConfigs)?.id ?? 0);
   const submit = useSubmit();
   const end = start && Number.isInteger(years) && years > 0 && years <= 120
     ? addYears(start, years)

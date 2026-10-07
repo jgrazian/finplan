@@ -129,7 +129,19 @@ pub struct SimulationResult {
     /// When, where and how badly this path went short of cash.
     #[serde(default)]
     pub diagnostics: super::PathDiagnostics,
+    /// Income tax the path's tax-deferred balances still owe when it ends, in
+    /// end-of-plan dollars: the balances withdrawn evenly over
+    /// [`crate::model::INHERITED_DRAWDOWN_YEARS`] years on top of the plan's
+    /// last full year of ordinary income, through that year's indexed
+    /// brackets and the state rate. What [`after_tax_final_net_worth`]
+    /// subtracts. Zero for a result stored before it existed.
+    #[serde(default)]
+    pub deferred_exit_tax: f64,
 }
+
+/// The years an inherited pre-tax account must be emptied in: the SECURE Act's
+/// ten-year rule for most heirs. Also a fair pace for an owner spending it.
+pub const INHERITED_DRAWDOWN_YEARS: f64 = 10.0;
 
 impl SimulationResult {
     /// Get the final balance for a specific account
@@ -788,6 +800,8 @@ impl MeanAccumulators {
             warnings: Vec::new(), // No warnings for averaged results
             cumulative_inflation: self.inflation.build_mean_inflation(),
             diagnostics: super::PathDiagnostics::default(),
+            // A tax on an averaged balance is no path's tax.
+            deferred_exit_tax: 0.0,
         }
     }
 }
@@ -892,28 +906,13 @@ pub fn final_net_worth(result: &SimulationResult) -> f64 {
     })
 }
 
-/// Final net worth after the tax a pre-tax balance still owes: every account
-/// in `tax_deferred` counts at `1 - rate` of its value, everything else
-/// (taxable, tax-free, bank, property, debt) at its value.
+/// Final net worth after the income tax the path's pre-tax balances still owe
+/// ([`SimulationResult::deferred_exit_tax`]). Taxable, tax-free, bank,
+/// property and debt count at their value: a taxable account's gains are
+/// stepped up at death, and a Roth owes nothing.
 #[must_use]
-pub fn after_tax_final_net_worth(
-    result: &SimulationResult,
-    tax_deferred: &[AccountId],
-    rate: f64,
-) -> f64 {
-    result.wealth_snapshots.last().map_or(0.0, |snap| {
-        snap.accounts
-            .iter()
-            .map(|a| {
-                let value = a.total_value();
-                if tax_deferred.contains(&a.account_id) {
-                    value * (1.0 - rate)
-                } else {
-                    value
-                }
-            })
-            .sum()
-    })
+pub fn after_tax_final_net_worth(result: &SimulationResult) -> f64 {
+    final_net_worth(result) - result.deferred_exit_tax
 }
 
 impl MonteCarloStats {

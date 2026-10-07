@@ -2,9 +2,9 @@ use crate::config::SimulationConfig;
 use crate::error::{LookupError, Result, SimulationError};
 use crate::model::{
     Account, AccountFlavor, AccountId, AssetCoord, AssetId, AssetInfo, ConversionTranche, Event,
-    EventEffect, EventId, EventTrigger, LedgerEntry, Market, ParameterId, ParameterValue,
-    ReturnProfileId, RmdTable, SimulationWarning, StateEvent, TaxBracket, TaxConfig, TaxSummary,
-    WealthSnapshot,
+    EventEffect, EventId, EventTrigger, INHERITED_DRAWDOWN_YEARS, LedgerEntry, Market, ParameterId,
+    ParameterValue, ReturnProfileId, RmdTable, SimulationWarning, StateEvent, TaxBracket,
+    TaxConfig, TaxSummary, WealthSnapshot,
 };
 use crate::taxes::YtdIncome;
 use rand::SeedableRng;
@@ -778,24 +778,73 @@ impl SimulationState {
     /// moves them too: what of it ordinary income leaves unused shelters
     /// gains.
     pub(crate) fn index_federal_brackets(&mut self, tax_year: i16) {
-        let years_elapsed = (tax_year - self.timeline.start_date.year()).max(0) as usize;
+        let (deduction, factor) = self.indexing_for(tax_year);
+        let config = &mut self.taxes.config;
+        config.federal_brackets =
+            crate::taxes::indexed_brackets(&self.taxes.base_federal_brackets, deduction, factor);
+        config.capital_gains_brackets =
+            crate::taxes::indexed_brackets(&self.taxes.base_gains_brackets, deduction, factor);
+    }
+
+    /// `tax_year`'s standard deduction (with the 65+ extra once it applies)
+    /// and the inflation factor its thresholds are scaled by: the path's
+    /// cumulative inflation through the end of the prior year.
+    fn indexing_for(&self, tax_year: i16) -> (f64, f64) {
         let factor = self
             .portfolio
             .market
-            .inflation_factor_at_year(years_elapsed);
-        let config = &mut self.taxes.config;
-        let mut deduction = config.standard_deduction;
+            .inflation_factor_at_year(self.years_elapsed(tax_year));
+        let mut deduction = self.taxes.config.standard_deduction;
         if self
             .taxes
             .age_65_tax_year
             .is_some_and(|year| tax_year >= year)
         {
-            deduction += config.age_65_extra_deduction;
+            deduction += self.taxes.config.age_65_extra_deduction;
         }
-        config.federal_brackets =
+        (deduction, factor)
+    }
+
+    fn years_elapsed(&self, tax_year: i16) -> usize {
+        (tax_year - self.timeline.start_date.year()).max(0) as usize
+    }
+
+    /// The income tax `deferred_balance` (the path's tax-deferred balances at
+    /// its end) still owes, in end-of-plan dollars.
+    ///
+    /// Nobody pays it in one year: an heir must empty an inherited IRA within
+    /// ten years, and an owner spends one down over about as long. So it is
+    /// taken out evenly over [`INHERITED_DRAWDOWN_YEARS`], each year's share
+    /// stacked on the plan's last full year of ordinary income and taxed like
+    /// any tax-deferred withdrawal: the year's indexed federal brackets, with
+    /// its deduction, plus the flat state rate. The share is held level, as
+    /// if the account grew with the inflation the brackets are indexed to.
+    /// The plan's own income stands in for the heir's, which it cannot know.
+    pub(crate) fn deferred_exit_tax(&self, deferred_balance: f64) -> f64 {
+        if deferred_balance <= 0.0 {
+            return 0.0;
+        }
+        let end_year = self.timeline.end_date.year();
+        let last_full_year = end_year - 1;
+        let (deduction, factor) = self.indexing_for(end_year);
+        let brackets =
             crate::taxes::indexed_brackets(&self.taxes.base_federal_brackets, deduction, factor);
-        config.capital_gains_brackets =
-            crate::taxes::indexed_brackets(&self.taxes.base_gains_brackets, deduction, factor);
+        // Last year's income, priced in this year's dollars.
+        let last_factor = self
+            .portfolio
+            .market
+            .inflation_factor_at_year(self.years_elapsed(last_full_year));
+        let other_income = self
+            .taxes
+            .yearly_taxes
+            .iter()
+            .find(|t| t.year == last_full_year)
+            .map_or(0.0, |t| t.ordinary_income)
+            * (factor / last_factor);
+        let share = deferred_balance / INHERITED_DRAWDOWN_YEARS;
+        let yearly = crate::taxes::calculate_federal_marginal_tax(share, other_income, &brackets)
+            + share * self.taxes.config.state_rate;
+        yearly * INHERITED_DRAWDOWN_YEARS
     }
 
     /// Check if we've crossed into a new year and finalize previous year's taxes
