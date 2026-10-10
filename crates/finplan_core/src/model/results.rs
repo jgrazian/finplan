@@ -440,6 +440,10 @@ pub struct MonteCarloStats {
     /// For Median/SuccessRate/Percentiles: relative change from previous batch
     #[serde(default)]
     pub convergence_value: Option<f64>,
+    /// How much the paths spent and how deep their cuts went, for a plan
+    /// with a `Spending` effect; absent otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spending: Option<super::SpendingStats>,
 }
 
 /// Accumulator for computing mean wealth snapshots across iterations
@@ -878,6 +882,10 @@ pub struct MonteCarloSummary {
     /// seed)`: `simulate(config, seed)` reproduces that path exactly.
     #[serde(default)]
     pub percentile_seeds: Vec<(f64, u64)>,
+    /// Real total spending by year (expenses, draws and loan payments), for
+    /// a plan with a `Spending` effect; absent otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub real_spending: Option<super::RealSpendingSummary>,
 }
 
 impl MonteCarloSummary {

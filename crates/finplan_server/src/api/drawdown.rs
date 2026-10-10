@@ -18,6 +18,7 @@ use finplan_plan::drawdown::{
     DrawdownRequest,
 };
 use finplan_plan::graph::ScenarioGraph;
+use finplan_plan::spending::{self, SpendingCompareRequest, SpendingComparison};
 
 use super::what_if::CancelOnDrop;
 
@@ -25,6 +26,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/runs/{run_id}/drawdown", post(project))
         .route("/runs/{run_id}/drawdown/compare", post(compare))
+        .route("/runs/{run_id}/spending/compare", post(compare_spending))
 }
 
 const STALE: &str = "Run the plan again to see drawdown.";
@@ -95,6 +97,45 @@ async fn compare(
     let outcome = tokio::task::spawn_blocking(move || {
         let _permit = permit;
         drawdown::compare(&graph, &body, &mut ProgressRunner::new(Some(&progress)))
+    })
+    .await;
+    drop(guard);
+    match outcome {
+        Ok(Ok(comparison)) => Ok(Json(comparison)),
+        Ok(Err(AnalysisError::Plan(error))) => Err(error.into()),
+        Ok(Err(AnalysisError::Cancelled)) => Err(ApiError::Conflict("comparison canceled".into())),
+        Ok(Err(AnalysisError::Failed(_))) | Err(_) => {
+            Err(ApiError::Internal("comparison failed".into()))
+        }
+    }
+}
+
+/// `POST /runs/{id}/spending/compare` (spec 22): a Monte Carlo per spending
+/// rule on one common seed, the plan's spending event swapped for each.
+async fn compare_spending(
+    State(state): State<AppState>,
+    user: CurrentUser,
+    Path(run_id): Path<i64>,
+    Json(body): Json<SpendingCompareRequest>,
+) -> ApiResult<Json<SpendingComparison>> {
+    let (graph, _) = run_inputs(&state, &user, run_id).await?;
+    let tier = crate::billing::entitlements(&state.db, &user.id, &state.config)
+        .await?
+        .tier(&state.config);
+    let permit =
+        crate::billing::admit_compute_observed(&user.id, tier, &state.telemetry, Origin::Request)?;
+
+    let choices = body.choices.as_ref().map_or(6, Vec::len);
+    let budget = (body
+        .iterations
+        .unwrap_or(spending::DEFAULT_COMPARE_ITERATIONS)
+        + 1)
+        * (choices + 1);
+    let progress = SweepProgress::new(budget);
+    let guard = CancelOnDrop(progress.clone());
+    let outcome = tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        spending::compare(&graph, &body, &mut ProgressRunner::new(Some(&progress)))
     })
     .await;
     drop(guard);

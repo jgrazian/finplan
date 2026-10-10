@@ -13,6 +13,7 @@ use crate::error::{PlanError, PlanResult};
 use crate::graph::{
     EffectRow, TransferAmountRow, TriggerRow, WithdrawalItemRow, WithdrawalSourceRow,
 };
+use crate::specs::{SpendingPortfolioSpec, SpendingRuleSpec};
 use ts_rs::TS;
 
 /// Matches `compile::MAX_DEPTH`, enforced on the way in so a pathological
@@ -729,6 +730,22 @@ pub enum EffectSpec {
         #[serde(default)]
         pay_tax_from_account_id: Option<i64>,
     },
+    /// Retirement spending decided by a rule once a year (spec 22): the
+    /// draw is paid out of `from_account_id` at each occurrence of a
+    /// monthly, quarterly or yearly event. With `pass_through`, the
+    /// account's other income and expenses are spent through it too.
+    Spending {
+        from_account_id: i64,
+        rule: SpendingRuleSpec,
+        #[serde(default)]
+        portfolio: SpendingPortfolioSpec,
+        #[serde(default = "pass_through_default")]
+        pass_through: bool,
+    },
+}
+
+fn pass_through_default() -> bool {
+    true
 }
 
 /// How a `BuyProperty` is financed.
@@ -812,6 +829,19 @@ impl EffectSpec {
                 "a market shock's drop is a fraction between 0 and 1",
             ));
         }
+        if let EffectSpec::Spending {
+            rule, portfolio, ..
+        } = self
+        {
+            rule.validate()?;
+            if let SpendingPortfolioSpec::Accounts { account_ids } = portfolio
+                && account_ids.is_empty()
+            {
+                return Err(PlanError::invalid(
+                    "a spending portfolio names at least one account",
+                ));
+            }
+        }
         if let EffectSpec::BuyProperty {
             financing: Some(financing),
             ..
@@ -849,9 +879,31 @@ impl EffectSpec {
             gain_exclusion: f.gain_exclusion,
             shock_drop: f.shock_drop,
             pay_tax_from_account_id: f.pay_tax_from_account_id,
+            spending_rule: match self {
+                EffectSpec::Spending { rule, .. } => Some(rule.to_column()),
+                _ => None,
+            },
+            pass_through: match self {
+                EffectSpec::Spending { pass_through, .. } => Some(i64::from(*pass_through)),
+                _ => None,
+            },
         });
 
         match self {
+            EffectSpec::Spending {
+                portfolio: SpendingPortfolioSpec::Accounts { account_ids },
+                ..
+            } => {
+                for (position, account_id) in account_ids.iter().enumerate() {
+                    batch.push_withdrawal_item(WithdrawalItemRow {
+                        effect_id: id,
+                        role: "portfolio".to_string(),
+                        position: position as i64,
+                        account_id: *account_id,
+                        asset_id: None,
+                    });
+                }
+            }
             EffectSpec::Sweep {
                 sources: Some(sources),
                 ..
@@ -1125,6 +1177,12 @@ impl From<&EffectSpec> for EffectFields {
                 to_account_id: Some(*to_account_id),
                 pay_tax_from_account_id: *pay_tax_from_account_id,
                 ..EffectFields::blank("RothConversion")
+            },
+            EffectSpec::Spending {
+                from_account_id, ..
+            } => EffectFields {
+                from_account_id: Some(*from_account_id),
+                ..EffectFields::blank("Spending")
             },
         }
     }

@@ -63,6 +63,29 @@ pub struct AnalysisPoint {
     #[serde(default)]
     #[ts(optional = nullable)]
     pub after_tax_p50: Option<f64>,
+    /// A spending rule's outcomes in today's dollars (spec 22): the median
+    /// lifetime draws, the 10th-percentile lowest yearly draw, and the share
+    /// of markets with a cut deeper than 10%. Absent without a rule.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub lifetime_spending: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub p10_lowest_draw: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub cut_rate: Option<f64>,
+}
+
+impl AnalysisPoint {
+    fn with_spending(mut self, spending: Option<&finplan_core::model::SpendingStats>) -> Self {
+        if let Some(s) = spending {
+            self.lifetime_spending = Some(s.median_lifetime_spending);
+            self.p10_lowest_draw = Some(s.p10_lowest_draw);
+            self.cut_rate = Some(s.cut_rate);
+        }
+        self
+    }
 }
 
 impl From<&MonteCarloStats> for AnalysisPoint {
@@ -81,7 +104,11 @@ impl From<&MonteCarloStats> for AnalysisPoint {
             p50: at(0.50),
             p95: at(0.95),
             after_tax_p50: stats.after_tax_percentile(0.50),
+            lifetime_spending: None,
+            p10_lowest_draw: None,
+            cut_rate: None,
         }
+        .with_spending(stats.spending.as_ref())
     }
 }
 
@@ -95,7 +122,11 @@ fn point_from_probe(probe: &SolveProbe) -> AnalysisPoint {
         p50: at(0.50),
         p95: at(0.95),
         after_tax_p50: probe.after_tax_percentile(0.50),
+        lifetime_spending: None,
+        p10_lowest_draw: None,
+        cut_rate: None,
     }
+    .with_spending(probe.spending.as_ref())
 }
 
 /// One axis of a sweep: which parameter, and the values it was stepped over.
@@ -224,6 +255,7 @@ impl SolveOutcome {
             constraint: match results.constraint_metric {
                 SolveConstraintMetric::SuccessRate => "success-rate",
                 SolveConstraintMetric::FundingSuccessRate => "funding-success-rate",
+                SolveConstraintMetric::LowestDrawP10 { .. } => "lowest-draw-p10",
             }
             .to_string(),
             method: match results.method {

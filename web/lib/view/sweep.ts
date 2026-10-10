@@ -13,7 +13,16 @@ import { paramTick } from "./analysis.ts";
 
 // ───────────────────────────── metrics ─────────────────────────────
 
-export type MetricId = "success" | "funding" | "p50" | "p5" | "p95" | "after_tax";
+export type MetricId =
+  | "success"
+  | "funding"
+  | "p50"
+  | "p5"
+  | "p95"
+  | "after_tax"
+  | "lifetime_spending"
+  | "lowest_draw"
+  | "cut_rate";
 
 /** One dependent variable a graph can be drawn against. */
 export interface Metric {
@@ -98,7 +107,19 @@ export const METRICS: readonly Metric[] = [
   money("p95", "P95 terminal net worth", "P95 terminal", (p) => p.p95),
   // Tax-deferred balances net of the plan's deferred tax rate.
   money("after_tax", "Median after-tax ending balance", "after-tax P50", (p) => p.after_tax_p50),
+  // A spending rule's outcomes (spec 22), in today's dollars.
+  money("lifetime_spending", "Median lifetime spending", "lifetime spending", (p) => p.lifetime_spending),
+  money("lowest_draw", "1 in 10 markets, the draw dips to", "P10 lowest draw", (p) => p.p10_lowest_draw),
+  rate("cut_rate", "Markets with a cut deeper than 10%", "cuts over 10%", (p) => p.cut_rate ?? null),
 ];
+
+/** The metrics only a plan with a spending rule measures. */
+const SPENDING_METRICS: ReadonlySet<MetricId> = new Set(["lifetime_spending", "lowest_draw", "cut_rate"]);
+
+/** What a sweep's menus offer: the spending metrics only where it measured them. */
+export function metricsFor(space: Pick<SweepSpace, "plan">): readonly Metric[] {
+  return METRICS.filter((m) => !SPENDING_METRICS.has(m.id) || m.of(space.plan) !== undefined);
+}
 
 export function metric(id: MetricId): Metric {
   return METRICS.find((m) => m.id === id) ?? METRICS[0];

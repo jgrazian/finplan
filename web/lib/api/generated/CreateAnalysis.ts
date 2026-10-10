@@ -32,6 +32,12 @@ export type CreateAnalysis = {
    * The floor, as a fraction: `0.95` for "success ≥ 95%".
    */
   min_value: number;
+  /**
+   * And a spending rule's 10th-percentile lowest yearly draw at
+   * least this, in today's dollars (spec 22): "the largest starting
+   * draw with funding success ≥ 95% and a P10 lowest draw ≥ $X".
+   */
+  lowest_draw_floor?: number | null;
   iterations?: number | null;
 } | {
   "kind": "what-if";

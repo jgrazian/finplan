@@ -332,6 +332,8 @@ pub(crate) async fn ai_goal_seek(
     let achieved = |probe: &SolveProbe| match metric {
         SolveConstraintMetric::SuccessRate => Some(probe.success_rate),
         SolveConstraintMetric::FundingSuccessRate => probe.funding_success_rate,
+        // The AI's goal seek only asks for the two rates.
+        SolveConstraintMetric::LowestDrawP10 { .. } => None,
     };
     let point = |probe: &SolveProbe| {
         let value = probe.values.first().copied().unwrap_or(f64::NAN);

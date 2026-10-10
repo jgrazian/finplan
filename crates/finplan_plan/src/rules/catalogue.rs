@@ -151,6 +151,14 @@ const CATALOGUE: &[PlanCheck] = &[
         "Pre-tax money whose RMDs begin inside the plan, with a Roth account and no conversion yet.",
         "none (points at the conversion setting in Drawdown)",
     ),
+    check(
+        "spending_rules",
+        Preflight,
+        Plan,
+        Check,
+        "More than one spending rule on: their draws add up.",
+        "none",
+    ),
     // ── rules ──
     check(
         "cost_basis_equals_value",
@@ -263,6 +271,24 @@ const CATALOGUE: &[PlanCheck] = &[
         "A success rate well above funding success, or one carried by illiquid property.",
         "none",
     ),
+    check(
+        "fixed_spending_stress",
+        Rule,
+        Plan,
+        Fix,
+        "A fixed retirement expense with a first-year withdrawal rate above 4.5% and funding \
+         success below 85%.",
+        "A change that replaces it with Guardrails at the same starting amount.",
+    ),
+    check(
+        "spending_rule_no_floor",
+        Rule,
+        Plan,
+        Check,
+        "A spending rule without a floor whose 10th-percentile lowest draw is under half its \
+         first draw.",
+        "A floor at two-thirds of the first draw, previewed with the funding success it costs.",
+    ),
     // ── the reviewer's checklist ──
     check(
         "missing_social_security",
@@ -277,7 +303,8 @@ const CATALOGUE: &[PlanCheck] = &[
         Reviewer,
         Plan,
         Check,
-        "Retirement spending that never changes, with no health care or late-life costs.",
+        "Retirement spending (a fixed expense or a spending rule) that never changes shape, \
+         with no health care or late-life costs.",
         "Spending events for what is missing, labelled as estimates.",
     ),
     check(

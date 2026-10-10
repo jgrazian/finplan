@@ -111,6 +111,11 @@ pub enum CreateAnalysis {
         constraint: Option<ConstraintRequest>,
         /// The floor, as a fraction: `0.95` for "success ≥ 95%".
         min_value: f64,
+        /// And a spending rule's 10th-percentile lowest yearly draw at
+        /// least this, in today's dollars (spec 22): "the largest starting
+        /// draw with funding success ≥ 95% and a P10 lowest draw ≥ $X".
+        #[serde(default)]
+        lowest_draw_floor: Option<f64>,
         #[serde(default)]
         iterations: Option<usize>,
     },

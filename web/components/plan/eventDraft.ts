@@ -108,11 +108,24 @@ export function pendingCount(changed: EventChanges): number {
  */
 export function eventProblem(draft: EventDraft): string | null {
   if (draft.name.trim() === "") return "An event needs a name.";
+  if (draft.effects.some((e) => e.form === "Spending" && !e.raw) && spendingPerYear(draft.trigger) == null) {
+    return "A spending rule's event repeats monthly, quarterly or yearly.";
+  }
   return (
     triggerProblem(draft.trigger) ??
     draft.effects.map(effectProblem).find((p) => p != null) ??
     null
   );
+}
+
+/**
+ * How often an event fires a year, for the intervals a spending rule takes
+ * (12, 4 or 1); null for any other trigger.
+ */
+export function spendingPerYear(trigger: TriggerDraft): number | null {
+  const spec = toTriggerSpec(trigger);
+  if (spec.kind !== "Repeating") return null;
+  return { Monthly: 12, Quarterly: 4, Yearly: 1 }[spec.interval as "Monthly" | "Quarterly" | "Yearly"] ?? null;
 }
 
 export function toEventBody(draft: EventDraft): EventBody {

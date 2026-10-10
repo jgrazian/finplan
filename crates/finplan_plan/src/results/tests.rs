@@ -196,3 +196,40 @@ fn run_results_round_trip_through_json() {
         .unwrap();
     assert!(page.total >= page.entries.len() as i64);
 }
+
+/// The spending block names the rule it describes, and carries the cut cap
+/// only when every rule caps its cuts (spec 22).
+#[test]
+fn the_spending_block_names_its_rule_and_any_cut_cap() {
+    let spending_with = |rule: serde_json::Value| {
+        let mut graph: ScenarioGraph =
+            serde_json::from_str(include_str!("../../testdata/default_snapshot.json")).unwrap();
+        graph.scenario.duration_years = 20;
+        let op: crate::edit::EditOp = serde_json::from_value(serde_json::json!({
+            "op": "create_event", "body": {
+                "name": "Retirement spending", "enabled": true,
+                "trigger": {"kind": "Repeating", "interval": "Monthly",
+                            "start_condition": {"kind": "Date", "on_date": "2036-01-01"}},
+                "effects": [{"kind": "Spending", "from_account_id": 6, "rule": rule}]}}))
+        .unwrap();
+        crate::edit::apply(&mut graph, &op).unwrap();
+        let compiled = compile(&graph).unwrap();
+        let config = MonteCarloConfig {
+            iterations: 10,
+            percentiles: vec![0.5],
+            seed: Some(3),
+            ..MonteCarloConfig::default()
+        };
+        let summary = monte_carlo_simulate_with_config(&compiled.config, &config).unwrap();
+        project(&compiled, &summary, &RunSettings::default())
+            .spending
+            .expect("a spending block")
+    };
+    let capped = spending_with(serde_json::json!({"rule": "CappedChange", "rate": 0.04}));
+    assert_eq!(capped.rules, ["Capped change"]);
+    assert_eq!(capped.cut_cap, Some(0.025));
+    assert_eq!(capped.cut_rate, 0.0);
+    let percent = spending_with(serde_json::json!({"rule": "PercentOfPortfolio", "rate": 0.04}));
+    assert_eq!(percent.rules, ["Percent of portfolio"]);
+    assert_eq!(percent.cut_cap, None);
+}

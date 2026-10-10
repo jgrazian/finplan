@@ -4,6 +4,8 @@ import type { AmountSpec } from "./AmountSpec";
 import type { FinancingSpec } from "./FinancingSpec";
 import type { IncomeType } from "./IncomeType";
 import type { LotMethod } from "./LotMethod";
+import type { SpendingPortfolioSpec } from "./SpendingPortfolioSpec";
+import type { SpendingRuleSpec } from "./SpendingRuleSpec";
 import type { WithdrawalSourcesSpec } from "./WithdrawalSourcesSpec";
 
 export type EffectSpec =
@@ -95,4 +97,11 @@ export type EffectSpec =
     to_account_id: number;
     amount: AmountSpec;
     pay_tax_from_account_id: number | null;
+  }
+  | {
+    "kind": "Spending";
+    from_account_id: number;
+    rule: SpendingRuleSpec;
+    portfolio: SpendingPortfolioSpec;
+    pass_through: boolean;
   };

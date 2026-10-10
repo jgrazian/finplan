@@ -673,3 +673,58 @@ fn a_conversion_into_an_account_that_is_not_a_roth_does_not_apply() {
     .unwrap();
     assert!(f.apply(&[with_roth(&f), expansion.changes]).is_err());
 }
+
+/// Retirement spending with a rule (spec 22) is a monthly `Spending` effect
+/// from the retirement date, refilled from investments when asked, and the
+/// plan compiles; without one it is the fixed expense it always was.
+#[test]
+fn retirement_spending_can_adjust_with_the_market() {
+    let f = Fixture::new();
+    let retirement = |prefix: &str, name: &str, rule: Value| {
+        request(
+            json!({"kind": "retirement", "key_prefix": prefix, "name": name,
+            "retirement": {"kind": "Age", "years": 65},
+            "spending": {"name": format!("{name} spending"),
+                         "from_account_id": {"$new": "checking"}, "annual_amount": 60000,
+                         "fund_from_investments": true, "rule": rule}}),
+        )
+        .expand()
+        .unwrap()
+        .changes
+    };
+    let guardrails = retirement(
+        "g_",
+        "Retired",
+        json!({"rule": "Guardrails", "initial": {"kind": "Amount", "amount": 60000}}),
+    );
+    let fixed = retirement("f_", "Also retired", Value::Null);
+    let g = f.apply(&[f.base(), guardrails, fixed]).unwrap();
+    crate::compile::compile(&g).expect("the plan compiles");
+
+    let dynamic = event(&g, "Retired spending");
+    assert_eq!(dynamic.effects.len(), 2);
+    let EffectSpec::Spending {
+        rule, pass_through, ..
+    } = &dynamic.effects[0]
+    else {
+        panic!("{:?}", dynamic.effects[0]);
+    };
+    assert_eq!(*rule, crate::specs::SpendingRuleSpec::guardrails(60_000.0));
+    assert!(*pass_through);
+    assert!(matches!(dynamic.effects[1], EffectSpec::Sweep { .. }));
+    assert!(matches!(
+        dynamic.trigger,
+        crate::specs::TriggerSpec::Repeating {
+            interval: Interval::Monthly,
+            ..
+        }
+    ));
+
+    let fixed = event(&g, "Also retired spending");
+    assert!(
+        fixed
+            .effects
+            .iter()
+            .any(|e| matches!(e, EffectSpec::Expense { .. }))
+    );
+}

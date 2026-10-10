@@ -604,3 +604,105 @@ fn stacks_validate_their_shape() {
     let mixed = stack(json!([entry("on", shock.clone()), entry("off", shock)]));
     assert_eq!(mixed.enabled_layers().len(), 1);
 }
+
+/// The plan above, with a monthly guardrails rule spending from USAA, funded
+/// by the investments when cash runs short.
+fn spending_plan() -> (ScenarioGraph, i64) {
+    let mut graph = plan();
+    let body: crate::specs::scenarios::SetFunding =
+        serde_json::from_value(json!({"funding": {"strategy": "TaxEfficientEarly"}})).unwrap();
+    edit::set_funding(&mut graph, &body).unwrap();
+    let op: EditOp = serde_json::from_value(json!({"op": "create_event", "body": {
+        "name": "Spending rule", "enabled": true,
+        "trigger": {"kind": "Repeating", "interval": "Monthly",
+                    "start_condition": {"kind": "Date", "on_date": "2030-01-01"}},
+        "effects": [{"kind": "Spending", "from_account_id": 6,
+            "rule": {"rule": "Guardrails", "initial": {"kind": "Amount", "amount": 60000.0},
+                     "floor": 30000.0}}]}}))
+    .unwrap();
+    let id = edit::apply(&mut graph, &op).unwrap().id.unwrap();
+    (graph, id)
+}
+
+#[test]
+fn a_spending_rules_terms_are_analysis_parameters() {
+    let (graph, event) = spending_plan();
+    let found = discover(&graph).unwrap();
+    let terms: Vec<(&str, &str)> = found
+        .iter()
+        .filter(|p| p.id.starts_with("spending:"))
+        .map(|p| (p.id.as_str(), p.kind.as_str()))
+        .collect();
+    let id = |term: &str| format!("spending:{event}:{term}");
+    assert_eq!(
+        terms,
+        [
+            (id("initial-amount").as_str(), "amount"),
+            (id("band").as_str(), "rate"),
+            (id("step").as_str(), "rate"),
+            (id("floor").as_str(), "amount"),
+        ]
+    );
+    let start = found.iter().find(|p| p.id == id("initial-amount")).unwrap();
+    assert_eq!(start.name, "Spending rule · starting amount");
+    assert_eq!(start.current, 60_000.0);
+    assert!(start.min < 60_000.0 && start.max > 60_000.0);
+
+    // A sweep over the starting amount reports the rule's outcomes per cell.
+    let outcome = analyze(
+        &graph,
+        request(json!({"kind": "sweep", "iterations": 25,
+            "axes": [{"parameter_id": id("initial-amount"), "min": 40000, "max": 80000, "steps": 2}]})),
+        &LIMITS,
+        &mut Sequential::default(),
+    )
+    .unwrap();
+    let body = as_json(&outcome);
+    let cells = body["cells"].as_array().unwrap();
+    assert_eq!(cells.len(), 2);
+    let lifetime = |i: usize| cells[i]["lifetime_spending"].as_f64().unwrap();
+    assert!(lifetime(1) > lifetime(0), "{body}");
+    assert!(cells[0]["p10_lowest_draw"].is_number() && cells[0]["cut_rate"].is_number());
+    // So does the plan as it stands.
+    assert!(body["plan"].get("p10_lowest_draw").is_some());
+}
+
+#[test]
+fn a_solve_can_also_hold_the_lowest_draw_above_a_floor() {
+    let (graph, event) = spending_plan();
+    let solve = |floor: f64| {
+        analyze(
+            &graph,
+            request(json!({"kind": "solve", "iterations": 25,
+                "vary": [{"parameter_id": format!("spending:{event}:initial-amount"),
+                          "min": 20000, "max": 200000}],
+                "objective": "max-parameter", "constraint": "funding-success-rate",
+                "min_value": 0.8, "lowest_draw_floor": floor})),
+            &LIMITS,
+            &mut Sequential::default(),
+        )
+        .unwrap()
+    };
+    let body = as_json(&solve(10_000.0));
+    let best = &body["best"];
+    assert!(
+        best["p10_lowest_draw"].as_f64().unwrap() >= 10_000.0,
+        "{body}"
+    );
+    assert!(
+        best["funding_success_rate"].as_f64().unwrap() >= 0.8,
+        "{body}"
+    );
+    assert!(as_json(&solve(1_000_000.0))["best"].is_null());
+
+    let refused = prepare(
+        &graph,
+        request(
+            json!({"kind": "solve", "min_value": 0.9, "objective": "max-parameter",
+            "vary": [{"parameter_id": format!("spending:{event}:band")}],
+            "lowest_draw_floor": -5.0}),
+        ),
+        &LIMITS,
+    );
+    assert!(refused.is_err());
+}

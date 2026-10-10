@@ -347,6 +347,16 @@ fn read_effect(graph: &ScenarioGraph, effect_id: i64, depth: usize) -> PlanResul
             amount: amount()?,
             pay_tax_from_account_id: row.pay_tax_from_account_id,
         },
+        "Spending" => EffectSpec::Spending {
+            from_account_id: from,
+            rule: crate::specs::SpendingRuleSpec::from_column(
+                row.spending_rule
+                    .as_deref()
+                    .ok_or_else(|| PlanError::internal("Spending effect is missing its rule"))?,
+            )?,
+            portfolio: read_spending_portfolio(graph, effect_id),
+            pass_through: row.pass_through.unwrap_or(1) != 0,
+        },
         "MarketShock" => EffectSpec::MarketShock {
             drop: row.shock_drop.unwrap_or_default(),
         },
@@ -380,6 +390,27 @@ fn read_effect(graph: &ScenarioGraph, effect_id: i64, depth: usize) -> PlanResul
             }
         }
     })
+}
+
+/// A `Spending` effect's portfolio: its `portfolio` items, or every liquid
+/// account when it has none.
+pub(crate) fn read_spending_portfolio(
+    graph: &ScenarioGraph,
+    effect_id: i64,
+) -> crate::specs::SpendingPortfolioSpec {
+    let account_ids: Vec<i64> = graph
+        .withdrawal_items
+        .get(&effect_id)
+        .into_iter()
+        .flatten()
+        .filter(|i| i.role == "portfolio")
+        .map(|i| i.account_id)
+        .collect();
+    if account_ids.is_empty() {
+        crate::specs::SpendingPortfolioSpec::Liquid
+    } else {
+        crate::specs::SpendingPortfolioSpec::Accounts { account_ids }
+    }
 }
 
 fn read_withdrawal_sources(
@@ -458,6 +489,25 @@ pub fn read_event(graph: &ScenarioGraph, event_id: i64) -> PlanResult<Event> {
 
 /// Lower `body`'s trigger and effects into `batch`, hung on event `event_id`.
 pub fn lower_tree(batch: &mut RowBatch, event_id: i64, body: &EventBody) -> PlanResult<()> {
+    let spends = body
+        .effects
+        .iter()
+        .any(|e| matches!(e, EffectSpec::Spending { .. }));
+    if spends
+        && !matches!(
+            body.trigger,
+            TriggerSpec::Repeating {
+                interval: crate::specs::Interval::Monthly
+                    | crate::specs::Interval::Quarterly
+                    | crate::specs::Interval::Yearly,
+                ..
+            }
+        )
+    {
+        return Err(PlanError::invalid(
+            "a Spending effect's event repeats monthly, quarterly or yearly",
+        ));
+    }
     body.trigger
         .lower(batch, TriggerParent::Event(event_id), 0)?;
 

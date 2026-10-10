@@ -1188,6 +1188,89 @@ async fn roth_conversions_match_the_route_and_are_refused_alike() {
     assert_same(&plan, &mem, "after refusals").await;
 }
 
+/// A `Spending` effect (spec 22) writes, reads and refuses the same through
+/// the route and the in-memory edit: its rule, its named portfolio and
+/// pass-through survive, and a weekly event, a property in the portfolio, a
+/// branch of a Random and a rate out of range are refused alike.
+#[tokio::test]
+async fn spending_effects_match_the_route_and_are_refused_alike() {
+    let plan = Plan::new().await;
+    let mut mem = plan.load().await;
+    let ids = &plan.ids;
+
+    let spending = |name: &str, interval: &str, effect: Value| {
+        body(json!({
+            "name": name,
+            "trigger": {"kind": "Repeating", "interval": interval,
+                        "start_condition": {"kind": "DateParameter", "parameter_id": ids.retire_date}},
+            "effects": [effect],
+        }))
+    };
+    let guardrails = json!({"kind": "Spending", "from_account_id": ids.usaa,
+        "rule": {"rule": "Guardrails", "initial": {"kind": "Amount", "amount": 80000.0}},
+        "portfolio": {"kind": "Accounts", "account_ids": [ids.vanguard, ids.roth]},
+        "pass_through": false});
+    let percent = json!({"kind": "Spending", "from_account_id": ids.usaa,
+        "rule": {"rule": "PercentOfPortfolio", "rate": 0.04, "floor": 40000.0, "ceiling": null}});
+    for body in [
+        spending("Guardrails spending", "Monthly", guardrails.clone()),
+        spending("Percent spending", "Yearly", percent.clone()),
+    ] {
+        let sql_id = plan.create(&body).await.unwrap();
+        let mem_id = create_event(&mut mem, &body).unwrap();
+        assert_eq!(sql_id, mem_id, "{}", body.name);
+        assert_same(&plan, &mem, &body.name).await;
+        let read = serde_json::to_value(read_event(&plan.load().await, sql_id).unwrap()).unwrap();
+        assert_eq!(read["effects"][0]["kind"], "Spending");
+    }
+    let stored = plan.load().await;
+    let read = |name: &str| {
+        let id = stored.events.iter().find(|e| e.name == name).unwrap().id;
+        serde_json::to_value(read_event(&stored, id).unwrap()).unwrap()["effects"][0].clone()
+    };
+    let effect = read("Guardrails spending");
+    assert_eq!(effect["rule"]["band"], 0.2);
+    assert_eq!(effect["rule"]["protect_final_years"], 15);
+    assert_eq!(
+        effect["portfolio"]["account_ids"],
+        json!([ids.vanguard, ids.roth])
+    );
+    assert_eq!(effect["pass_through"], false);
+    let effect = read("Percent spending");
+    assert_eq!(effect["portfolio"]["kind"], "Liquid");
+    assert_eq!(effect["pass_through"], true);
+    assert_eq!(effect["rule"]["floor"], 40000.0);
+    finplan_plan::compile::compile(&stored).unwrap();
+
+    // An account named by a portfolio is held by it, as by any other effect.
+    assert!(
+        finplan_plan::edit::delete_account(&mut mem.clone(), ids.vanguard).is_err(),
+        "a portfolio account cannot be deleted from under its rule"
+    );
+
+    let before = serde_json::to_value(&mem).unwrap();
+    let mut with_home = guardrails.clone();
+    with_home["portfolio"]["account_ids"] = json!([ids.vanguard, ids.home]);
+    let mut too_high = percent.clone();
+    too_high["rule"]["rate"] = json!(0.3);
+    for body in [
+        spending("Weekly spending", "Weekly", percent.clone()),
+        spending("Spending the house", "Monthly", with_home),
+        spending("Too high", "Yearly", too_high),
+        spending(
+            "Maybe spending",
+            "Yearly",
+            json!({"kind": "Random", "probability": 0.5, "on_true": percent.clone()}),
+        ),
+    ] {
+        let sql = plan.create(&body).await.unwrap_err();
+        let err = create_event(&mut mem, &body).unwrap_err();
+        assert_eq!(status(sql), status(err), "{}", body.name);
+        assert_eq!(serde_json::to_value(&mem).unwrap(), before, "{}", body.name);
+    }
+    assert_same(&plan, &mem, "after refusals").await;
+}
+
 #[tokio::test]
 async fn created_assets_and_accounts_match_the_route() {
     let plan = Plan::new().await;

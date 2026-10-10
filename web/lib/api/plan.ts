@@ -40,6 +40,8 @@ import type {
   CreateTaxConfig,
   DrawdownBody,
   DrawdownComparison,
+  SpendingCompareRequest,
+  SpendingComparison,
   DrawdownRequest,
   Event,
   EventBody,
@@ -228,6 +230,15 @@ export interface RunsApi {
    * stops the simulation.
    */
   drawdownCompare: (id: number, body?: CompareRequest, signal?: AbortSignal) => Promise<DrawdownComparison>;
+  /**
+   * The plan's spending event under each spending rule (spec 22), a small
+   * Monte Carlo per rule on one common seed. Aborting `signal` stops it.
+   */
+  spendingCompare: (
+    id: number,
+    body?: SpendingCompareRequest,
+    signal?: AbortSignal,
+  ) => Promise<SpendingComparison>;
   /** The inputs the run was made from: what freshness compares the plan's hash against. */
   inputs: (id: number) => Promise<RunInputs>;
   report: (id: number) => Promise<RunReport>;

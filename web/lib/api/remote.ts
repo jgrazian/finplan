@@ -37,6 +37,8 @@ import type {
   CreateTaxConfig,
   DrawdownBody,
   DrawdownComparison,
+  SpendingCompareRequest,
+  SpendingComparison,
   DrawdownRequest,
   Event,
   EventBody,
@@ -285,6 +287,9 @@ export const remoteApi: PlanApi = {
     /** Aborting `signal` stops the server's simulation too. */
     drawdownCompare: (id: number, body: CompareRequest = {}, signal?: AbortSignal) =>
       http.post<DrawdownComparison>(`/runs/${id}/drawdown/compare`, body, signal),
+    /** Aborting `signal` stops the server's simulation too. */
+    spendingCompare: (id: number, body: SpendingCompareRequest = {}, signal?: AbortSignal) =>
+      http.post<SpendingComparison>(`/runs/${id}/spending/compare`, body, signal),
     inputs: (id: number) => http.get<RunInputs>(`/runs/${id}/inputs`),
     report: (id: number) => http.get<RunReport>(`/runs/${id}/report`),
     compare: (left: number, right: number) =>

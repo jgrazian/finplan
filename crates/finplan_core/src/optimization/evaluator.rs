@@ -155,6 +155,7 @@ mod tests {
             converged: None,
             convergence_metric: None,
             convergence_value: None,
+            spending: None,
         };
         assert!(check_constraints(&constraints, &stats));
     }
@@ -178,6 +179,7 @@ mod tests {
             converged: None,
             convergence_metric: None,
             convergence_value: None,
+            spending: None,
         };
         let bad_stats = MonteCarloStats {
             success_rate: 0.85,

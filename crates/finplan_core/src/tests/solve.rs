@@ -49,6 +49,7 @@ fn config_for(objective: SolveObjective, parameters: Vec<SweepParameter>) -> Sol
             metric: SolveConstraintMetric::SuccessRate,
             min_value: 0.95,
         },
+        also: Vec::new(),
         mc_iterations: 8,
         parallel_batches: 1,
         seed: Some(7),

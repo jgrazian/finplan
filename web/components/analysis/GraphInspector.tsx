@@ -9,11 +9,11 @@ import {
   COLOR_SCALE_IDS,
   DEFAULT_SCALE,
   MAX_ELEVATION,
-  METRICS,
   MIN_ELEVATION,
   axisNames,
   clampElevation,
   graphTitle,
+  metricsFor,
   needsY,
   type GraphKind,
   type GraphSpec,
@@ -122,7 +122,7 @@ export function GraphInspector({
       <Field label="Shows">
         <Dropdown
           ariaLabel="Metric"
-          options={METRICS.map((m) => ({ value: m.id, label: m.label }))}
+          options={metricsFor(space).map((m) => ({ value: m.id, label: m.label }))}
           value={spec.metric}
           onChange={(metric) => onChange({ ...spec, metric: metric as MetricId })}
         />
@@ -176,7 +176,7 @@ export function GraphInspector({
             ariaLabel="Colour metric"
             options={[
               { value: "", label: "same as the height", detail: view.metric.short },
-              ...METRICS.filter((m) => m.id !== spec.metric).map((m) => ({
+              ...metricsFor(space).filter((m) => m.id !== spec.metric).map((m) => ({
                 value: m.id,
                 label: m.label,
               })),

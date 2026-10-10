@@ -186,3 +186,83 @@ fn quantile(sorted: &[f64], p: f64) -> f64 {
     }
     (lo + (hi - lo) * h.fract()).clamp(lo, hi)
 }
+
+/// Per-batch real total spending columns, one per calendar year of the plan,
+/// merged across batches before quantiles. Built only for a plan with a
+/// `Spending` effect, whose paths record their yearly spending.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RealSpendingAccumulator {
+    /// Where each year's point sits on net worth's grid.
+    dates: Vec<jiff::civil::Date>,
+    columns: Vec<Vec<f64>>,
+}
+
+impl RealSpendingAccumulator {
+    /// `None` when `template`'s plan has no `Spending` effect.
+    pub(super) fn new(template: &SimulationResult) -> Option<Self> {
+        let years = template.diagnostics.real_spending_by_year.len();
+        let first = template.wealth_snapshots.first()?.date;
+        let last = template.wealth_snapshots.last()?.date;
+        if years == 0 {
+            return None;
+        }
+        let dates = (0..years)
+            .map(|index| {
+                let year_end = jiff::civil::date(first.year() + index as i16, 12, 31);
+                year_end.min(last)
+            })
+            .collect();
+        Some(Self {
+            dates,
+            columns: vec![Vec::new(); years],
+        })
+    }
+
+    pub(super) fn accumulate(&mut self, result: &SimulationResult) -> Result<(), SimulationError> {
+        let values = &result.diagnostics.real_spending_by_year;
+        if values.len() != self.columns.len() || values.iter().any(|v| !v.is_finite()) {
+            return Err(SimulationError::Config(
+                "inconsistent real spending year grid".into(),
+            ));
+        }
+        for (column, value) in self.columns.iter_mut().zip(values) {
+            column.push(*value);
+        }
+        Ok(())
+    }
+
+    pub(super) fn merge(&mut self, other: Self) {
+        debug_assert_eq!(self.dates, other.dates);
+        for (column, mut values) in self.columns.iter_mut().zip(other.columns) {
+            column.append(&mut values);
+        }
+    }
+
+    pub(super) fn finish(mut self) -> Option<crate::model::RealSpendingSummary> {
+        let num_iterations = self.columns.first().map_or(0, Vec::len);
+        if num_iterations == 0 {
+            return None;
+        }
+        for column in &mut self.columns {
+            column.sort_unstable_by(f64::total_cmp);
+        }
+        Some(crate::model::RealSpendingSummary {
+            num_iterations,
+            points: self
+                .dates
+                .into_iter()
+                .zip(self.columns)
+                .map(|(date, values)| RealQuantilePoint {
+                    date,
+                    p5: quantile(&values, 0.05),
+                    p10: quantile(&values, 0.10),
+                    p25: quantile(&values, 0.25),
+                    p50: quantile(&values, 0.5),
+                    p75: quantile(&values, 0.75),
+                    p90: quantile(&values, 0.90),
+                    p95: quantile(&values, 0.95),
+                })
+                .collect(),
+        })
+    }
+}

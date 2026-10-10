@@ -10,6 +10,7 @@ export { IssuesDrawer } from "./IssuesDrawer";
 export { EffortMenu, EffortPanel, EFFORT_STOPS, effortLabel, nearestStop } from "./RunEffort";
 export type { RunEffort } from "./RunEffort";
 export { RunSummary } from "./RunSummary";
+export { SpendingCard } from "./SpendingCard";
 export { SuccessRate } from "./SuccessRate";
 export { WarningList } from "./WarningList";
 export type { ChartView } from "./types";

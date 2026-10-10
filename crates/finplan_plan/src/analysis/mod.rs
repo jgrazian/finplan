@@ -32,7 +32,7 @@ pub mod results;
 pub mod run;
 
 pub use finplan_core::analysis::{McRunner, ProgressRunner, StatsRun, SweepProgress};
-pub use params::{ParamKind, PlanParameter, parameters};
+pub use params::{ParamKind, PlanParameter, analysis_parameters, parameters};
 pub use prepare::{
     ANALYSIS_SEED, AnalysisSpec, Limits, MAX_ANALYSIS_ITERATIONS, MIN_ITERATIONS, Prepared,
     iterations_or_default, prepare,
@@ -53,7 +53,10 @@ use crate::graph::ScenarioGraph;
 /// the body of `GET /scenarios/{id}/analysis/parameters`.
 pub fn discover(graph: &ScenarioGraph) -> PlanResult<Vec<AnalysisParameter>> {
     let compiled = compile::compile(graph)?;
-    Ok(parameters(&compiled).iter().map(Into::into).collect())
+    Ok(analysis_parameters(&compiled)
+        .iter()
+        .map(Into::into)
+        .collect())
 }
 
 #[cfg(test)]

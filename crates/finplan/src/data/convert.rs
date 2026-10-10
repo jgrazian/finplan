@@ -735,6 +735,27 @@ fn convert_effect_inner(
             })
         }
 
+        EffectData::Spending {
+            from,
+            rule,
+            portfolio,
+            pass_through,
+        } => Ok(EventEffect::Spending {
+            from: resolve_account(from, ctx)?,
+            rule: rule.clone(),
+            portfolio: if portfolio.is_empty() {
+                finplan_core::model::SpendingPortfolio::Liquid
+            } else {
+                finplan_core::model::SpendingPortfolio::Accounts(
+                    portfolio
+                        .iter()
+                        .map(|tag| resolve_account(tag, ctx))
+                        .collect::<Result<_, _>>()?,
+                )
+            },
+            pass_through: *pass_through,
+        }),
+
         EffectData::RothConversion {
             from,
             to,
@@ -1102,6 +1123,50 @@ mod tests {
     use crate::data::profiles_data::ReturnProfileTag;
     use rand::RngCore;
     use std::collections::HashMap;
+
+    /// A spending rule in a scenario file (spec 22) round-trips through YAML
+    /// and converts, its portfolio's tags resolved.
+    #[test]
+    fn a_spending_rule_converts_from_its_yaml() {
+        let written = EffectData::Spending {
+            from: AccountTag("Checking".into()),
+            rule: finplan_core::model::SpendingRule::PercentOfPortfolio {
+                rate: 0.04,
+                floor: None,
+                ceiling: Some(90_000.0),
+            },
+            portfolio: vec![AccountTag("Brokerage".into())],
+            pass_through: true,
+        };
+        let yaml = serde_saphyr::to_string(&written).unwrap();
+        let effect: EffectData = serde_saphyr::from_str(&yaml).expect("a Spending effect");
+        let ctx = ResolveContext {
+            parameter_ids: HashMap::new(),
+            account_ids: HashMap::from([
+                ("Checking".to_string(), AccountId(1)),
+                ("Brokerage".to_string(), AccountId(2)),
+            ]),
+            asset_ids: HashMap::new(),
+            event_ids: HashMap::new(),
+            profile_ids: HashMap::new(),
+            property_assets: HashMap::new(),
+        };
+        let EventEffect::Spending {
+            from,
+            portfolio,
+            pass_through,
+            ..
+        } = convert_effect(&effect, &ctx).unwrap()
+        else {
+            panic!("not a Spending effect");
+        };
+        assert_eq!(from, AccountId(1));
+        assert_eq!(
+            portfolio,
+            finplan_core::model::SpendingPortfolio::Accounts(vec![AccountId(2)])
+        );
+        assert!(pass_through);
+    }
 
     /// Test that to_simulation_config produces deterministic results regardless of
     /// HashMap insertion order in historical_assets. This guards against non-determinism

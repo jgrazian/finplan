@@ -38,6 +38,15 @@ pub struct PathDiagnostics {
     /// were no longer positive — out of money to spend, whatever property or
     /// debt the path also holds.
     pub liquid_depleted: Option<jiff::civil::Date>,
+    /// How the path's `Spending` draws went; absent on a plan without one
+    /// (or a path whose spending never started).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spending: Option<super::SpendingDiagnostics>,
+    /// Total spending (expenses, draws and loan payments) per calendar year
+    /// from the plan's first, in plan-start dollars. Kept only on a plan with
+    /// a `Spending` effect.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub real_spending_by_year: Vec<f64>,
 }
 
 impl PathDiagnostics {

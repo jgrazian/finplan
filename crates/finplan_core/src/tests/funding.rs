@@ -413,6 +413,7 @@ fn funding_accumulator_merges_the_same_in_any_order() {
                 max_deficit: deficit,
                 shortfall_years: 1,
                 liquid_depleted: None,
+                ..PathDiagnostics::default()
             },
             deferred_exit_tax: 0.0,
         }

@@ -140,6 +140,7 @@ impl OptimizationResult {
                 converged: None,
                 convergence_metric: None,
                 convergence_value: None,
+                spending: None,
             },
             converged: false,
             termination_reason: TerminationReason::NoFeasibleSolution,

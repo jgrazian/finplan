@@ -20,7 +20,8 @@ use finplan_plan::specs::assets::{Asset, CreateAsset};
 use finplan_plan::specs::events::EventBody;
 use finplan_plan::specs::{
     AmountMode, AmountSpec, AssetRef, Comparison, EffectSpec, FinancingSpec, IncomeType, Interval,
-    LotMethod, OffsetUnit, TriggerSpec, WithdrawalSourcesSpec, WithdrawalStrategy,
+    LotMethod, OffsetUnit, SpendingInitialSpec, SpendingPortfolioSpec, SpendingRuleSpec,
+    TriggerSpec, WithdrawalSourcesSpec, WithdrawalStrategy,
 };
 use finplan_plan::suggest::{Change, ChangeOp, ChangeTarget};
 use finplan_plan::templates::{NewRef, ReinvestCashParams, RothConversionsParams, RowRef, When};
@@ -100,6 +101,9 @@ fn declarations() -> String {
         WithdrawalSourcesSpec::decl(&cfg),
         WithdrawalStrategy::decl(&cfg),
         FinancingSpec::decl(&cfg),
+        SpendingRuleSpec::decl(&cfg),
+        SpendingInitialSpec::decl(&cfg),
+        SpendingPortfolioSpec::decl(&cfg),
         AssetRef::decl(&cfg),
         Comparison::decl(&cfg),
         OffsetUnit::decl(&cfg),

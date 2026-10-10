@@ -14,6 +14,7 @@ import {
   NetWorthChart,
   type RunEffort,
   RunSummary,
+  SpendingCard,
   SuccessRate,
   WarningList,
   useYearFocus,
@@ -251,6 +252,15 @@ function ResultsContent({
             markers={markers}
             revealKey={results.runId}
           />
+
+          {results.spending && (
+            <SpendingCard
+              spending={results.spending}
+              years={bands.years}
+              focus={focus}
+              dollars={`${results.baseDate} dollars`}
+            />
+          )}
 
           {/* The ledger is a desktop instrument: ten columns of figures that
               a phone can only show by scrolling sideways. */}

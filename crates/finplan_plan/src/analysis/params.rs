@@ -1,9 +1,14 @@
 //! Named scenario inputs exposed to analysis. Coordinates on the wire are dollars,
 //! fractional rates, calendar years (including months / 12), or UTC epoch days.
-//! Only the registry is varied; event literals are never rewritten.
+//! The registry is varied, and so are the terms of a spending rule (spec 22);
+//! no other event literal is ever rewritten.
 
-use finplan_core::analysis::SweepParameter;
-use finplan_core::model::{CalendarAge, ParameterId, ParameterValue};
+use finplan_core::analysis::{
+    EffectParam, EffectTarget, SpendingField, SweepParameter, SweepTarget,
+};
+use finplan_core::model::{
+    CalendarAge, EventEffect, EventId, ParameterId, ParameterValue, SpendingInitial, SpendingRule,
+};
 use finplan_core::optimization::OptimizableParameter;
 use jiff::civil::Date;
 
@@ -28,6 +33,18 @@ pub struct PlanParameter {
     pub min: f64,
     pub max: f64,
     pub dense_id: ParameterId,
+    /// Set for a spending rule's term: which effect, and which term. The
+    /// registry fields above then name the event (`parameter_id` is its
+    /// database id) and `dense_id` means nothing.
+    pub spending: Option<SpendingSource>,
+}
+
+/// A spending rule's term, as a sweep reaches it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SpendingSource {
+    pub event: EventId,
+    pub effect_index: usize,
+    pub field: SpendingField,
 }
 
 fn epoch() -> Date {
@@ -88,6 +105,24 @@ impl PlanParameter {
     }
 
     pub fn sweep(&self, min: f64, max: f64, steps: usize) -> PlanResult<SweepParameter> {
+        if let Some(source) = self.spending {
+            if !(min.is_finite() && max.is_finite()) || max < min || (steps > 1 && max == min) {
+                return Err(PlanError::invalid(format!(
+                    "{} needs distinct ordered bounds",
+                    self.name
+                )));
+            }
+            return Ok(SweepParameter {
+                event_id: source.event,
+                target: SweepTarget::Effect {
+                    param: EffectParam::SpendingRule(source.field),
+                    target: EffectTarget::Index(source.effect_index),
+                },
+                min_value: min,
+                max_value: max,
+                step_count: steps,
+            });
+        }
         let parameter = OptimizableParameter {
             parameter_id: self.dense_id,
             min_value: self.typed_value(min)?,
@@ -168,9 +203,145 @@ pub fn parameters(compiled: &CompiledScenario) -> Vec<PlanParameter> {
             min,
             max,
             dense_id,
+            spending: None,
         });
     }
     out.sort_by_key(|p| p.parameter_id);
+    out
+}
+
+/// The terms of each spending rule in the plan (spec 22), as analysis
+/// parameters: `spending:<event id>:<term>`, named for the event.
+#[must_use]
+pub fn spending_parameters(compiled: &CompiledScenario) -> Vec<PlanParameter> {
+    let mut out = Vec::new();
+    for event in &compiled.config.events {
+        let Some(event_db_id) = compiled.id_map.event_db_id(event.event_id) else {
+            continue;
+        };
+        let event_name = compiled
+            .event_names
+            .get(&event_db_id)
+            .cloned()
+            .unwrap_or_else(|| format!("Event {event_db_id}"));
+        for (effect_index, effect) in event.effects.iter().enumerate() {
+            let EventEffect::Spending { rule, .. } = effect else {
+                continue;
+            };
+            for (field, label, kind, current, range) in spending_terms(rule) {
+                out.push(PlanParameter {
+                    id: format!("spending:{event_db_id}:{}", field_key(field)),
+                    parameter_id: event_db_id,
+                    name: format!("{event_name} · {label}"),
+                    kind,
+                    current,
+                    min: range.0,
+                    max: range.1,
+                    dense_id: ParameterId(0),
+                    spending: Some(SpendingSource {
+                        event: event.event_id,
+                        effect_index,
+                        field,
+                    }),
+                });
+            }
+        }
+    }
+    out
+}
+
+fn field_key(field: SpendingField) -> &'static str {
+    match field {
+        SpendingField::Rate => "rate",
+        SpendingField::InitialAmount => "initial-amount",
+        SpendingField::Band => "band",
+        SpendingField::Step => "step",
+        SpendingField::Floor => "floor",
+    }
+}
+
+type Term = (SpendingField, &'static str, ParamKind, f64, (f64, f64));
+
+/// What a rule lets an analysis vary, with each term's value and the range
+/// a sweep defaults to (inside what validation accepts).
+fn spending_terms(rule: &SpendingRule) -> Vec<Term> {
+    let rate = |r: f64| -> (f64, f64) { ((r * 0.5).max(0.005), (r * 1.5).min(0.2)) };
+    let amount = |a: f64| -> (f64, f64) { ((a * 0.5).max(0.0), (a * 1.5).max(1000.0)) };
+    let mut terms: Vec<Term> = Vec::new();
+    match rule {
+        SpendingRule::Guardrails {
+            initial,
+            band,
+            step,
+            floor,
+            ..
+        } => {
+            match initial {
+                SpendingInitial::Amount(a) => terms.push((
+                    SpendingField::InitialAmount,
+                    "starting amount",
+                    ParamKind::Amount,
+                    *a,
+                    amount(*a),
+                )),
+                SpendingInitial::Rate(r) => {
+                    terms.push((
+                        SpendingField::Rate,
+                        "starting rate",
+                        ParamKind::Rate,
+                        *r,
+                        rate(*r),
+                    ));
+                }
+            }
+            terms.push((
+                SpendingField::Band,
+                "band",
+                ParamKind::Rate,
+                *band,
+                (0.05, 0.5),
+            ));
+            terms.push((
+                SpendingField::Step,
+                "step",
+                ParamKind::Rate,
+                *step,
+                (0.02, 0.3),
+            ));
+            let f = floor.unwrap_or(0.0);
+            terms.push((
+                SpendingField::Floor,
+                "floor",
+                ParamKind::Amount,
+                f,
+                amount(f),
+            ));
+        }
+        SpendingRule::PercentOfPortfolio { rate: r, floor, .. } => {
+            terms.push((SpendingField::Rate, "rate", ParamKind::Rate, *r, rate(*r)));
+            let f = floor.unwrap_or(0.0);
+            terms.push((
+                SpendingField::Floor,
+                "floor",
+                ParamKind::Amount,
+                f,
+                amount(f),
+            ));
+        }
+        SpendingRule::CappedChange { rate: r, .. } => {
+            terms.push((SpendingField::Rate, "rate", ParamKind::Rate, *r, rate(*r)));
+        }
+        SpendingRule::Vpw { .. } => {}
+    }
+    terms
+}
+
+/// Everything an analysis can vary: the named parameters, then each spending
+/// rule's terms.
+#[must_use]
+pub fn analysis_parameters(compiled: &CompiledScenario) -> Vec<PlanParameter> {
+    let mut out = parameters(compiled);
+    out.extend(spending_parameters(compiled));
     out
 }
 
@@ -209,6 +380,7 @@ mod tests {
             min,
             max,
             dense_id: ParameterId(2),
+            spending: None,
         }
     }
     #[test]

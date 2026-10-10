@@ -281,6 +281,8 @@ export interface ResultsData {
    * 2.4. NaN when unmeasured, or for a synthetic nominal mean.
    */
   totalInflation: number;
+  /** What the plan's spending rule spent across every path; null without one. */
+  spending: import("./view/spending").SpendingView | null;
 }
 
 // ── scenario ──────────────────────────────────────────────────────────────
@@ -328,7 +330,8 @@ export type EffectKind =
   | "BuyProperty"
   | "SellProperty"
   | "MarketShock"
-  | "RothConversion";
+  | "RothConversion"
+  | "Spending";
 
 export interface EventEffect {
   kind: EffectKind;

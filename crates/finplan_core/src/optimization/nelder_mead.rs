@@ -396,6 +396,7 @@ mod tests {
                 converged: None,
                 convergence_metric: None,
                 convergence_value: None,
+                spending: None,
             },
         };
 

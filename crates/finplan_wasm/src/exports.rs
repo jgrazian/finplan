@@ -406,6 +406,17 @@ pub fn drawdown_compare(
     js(analysis::drawdown_compare_json(snapshot, body, &mut report))
 }
 
+/// See [`analysis::spending_compare_json`].
+#[wasm_bindgen]
+pub fn spending_compare(
+    snapshot: &str,
+    body: &str,
+    progress: &js_sys::Function,
+) -> Result<String, String> {
+    let mut report = progress_fn(progress);
+    js(analysis::spending_compare_json(snapshot, body, &mut report))
+}
+
 /// See [`analysis::apply_what_if_json`].
 #[wasm_bindgen]
 pub fn apply_what_if(

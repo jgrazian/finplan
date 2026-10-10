@@ -65,7 +65,9 @@ export interface AnalysisRequest {
 /** A Drawdown question about one run: its snapshot, and a `DrawdownRequest` or `CompareRequest` JSON. */
 export type DrawdownJob =
   | { compare: false; snapshot: string; /** The median path's decimal seed. */ seed: string; body: string }
-  | { compare: true; snapshot: string; body: string };
+  | { compare: true; snapshot: string; body: string }
+  /** Spending rules compared (spec 22): a `SpendingCompareRequest` body. */
+  | { compare: "spending"; snapshot: string; body: string };
 
 export interface AnalysisHandle {
   /** The `AnalysisOutcome` (or `WhatIfOutcome`) JSON. */
@@ -334,9 +336,12 @@ export class WorkerPool implements ComputePool {
 
   drawdown(job: DrawdownJob, onProgress?: (done: number, total: number) => void): AnalysisHandle {
     const owner = `drawdown-${this.nextId++}`;
-    const request: DistributiveOmit<ComputeRequest, "id"> = job.compare
-      ? { kind: "drawdown-compare", snapshot: job.snapshot, body: job.body }
-      : { kind: "drawdown", snapshot: job.snapshot, seed: job.seed, body: job.body };
+    const request: DistributiveOmit<ComputeRequest, "id"> =
+      job.compare === "spending"
+        ? { kind: "spending-compare", snapshot: job.snapshot, body: job.body }
+        : job.compare
+          ? { kind: "drawdown-compare", snapshot: job.snapshot, body: job.body }
+          : { kind: "drawdown", snapshot: job.snapshot, seed: job.seed, body: job.body };
     const promise = this.task(owner, request, onProgress);
     const stop = (error: LocalError) => {
       const waiting = this.queue.filter((task) => task.owner === owner);

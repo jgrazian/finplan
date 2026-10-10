@@ -12,9 +12,11 @@ pub mod events;
 pub mod parameters;
 pub mod profiles;
 pub mod scenarios;
+mod spending;
 pub mod taxes;
 mod tree;
 
+pub use spending::*;
 pub use tree::*;
 
 /// Distinguish "field absent" from "field present and null". Serde collapses

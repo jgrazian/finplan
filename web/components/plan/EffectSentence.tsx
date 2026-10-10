@@ -6,6 +6,7 @@ import {
   Blueprint,
   Button,
   CurrencyInput,
+  PercentInput,
   DragHandle,
   DropLine,
   Dropdown,
@@ -19,6 +20,15 @@ import { monthlyPayment } from "@/components/portfolio/AccountTerms";
 import { useReorder } from "@/lib/hooks/useReorder";
 import { money } from "@/lib/view/format";
 import { describeEffect, namesOf } from "@/lib/view/events";
+import {
+  CHOICE_EXPLAINED,
+  SPENDING_CHOICES,
+  type SpendingChoice,
+  portfolioValue,
+  startingAmount,
+  switchRule,
+} from "@/lib/view/spending";
+import type { SpendingRuleSpec } from "@/lib/api/types";
 import { AmountExpression } from "./AmountFields";
 import { readStaticAmount, withRootAmountMode } from "./amountDraft";
 import { Note, type TriggerContext, accountOptions, assetOptions, eventOptions } from "./TriggerFields";
@@ -39,7 +49,9 @@ import {
   emptyEffect,
   expandAmount,
   expandDownPayment,
+  portfolioSpec,
   shape,
+  spendingRuleOf,
   toEffectSpec,
   updateExpression,
 } from "./effectDraft";
@@ -88,11 +100,14 @@ export function EffectCards({
   context,
   onChange,
   disabled,
+  perYear = 1,
 }: {
   effects: EffectDraft[];
   context: TriggerContext;
   onChange: (next: EffectDraft[]) => void;
   disabled?: boolean;
+  /** How often the event fires a year: what a spending rule's yearly figure is spread over. */
+  perYear?: number;
 }) {
   const byUid = new Map(effects.map((e) => [e.uid, e]));
   // Every card starts as its one-line sentence; only one added here opens.
@@ -185,6 +200,7 @@ export function EffectCards({
                       onChange={(change) => patch(uid, change)}
                       editing={expanded ? editing : undefined}
                       onEdit={(slot) => edit(uid, slot)}
+                      perYear={perYear}
                     />
                     <span style={{ marginLeft: "auto", display: "flex", gap: 4 }}>
                       {expanded && (
@@ -239,6 +255,7 @@ function EffectSlots({
   editing,
   onEdit,
   disabled,
+  perYear = 1,
 }: {
   effect: EffectDraft;
   context: TriggerContext;
@@ -248,6 +265,7 @@ function EffectSlots({
   /** Show one expression's editor, or none. Opens the card. */
   onEdit: (slot: ExprSlot | undefined) => void;
   disabled?: boolean;
+  perYear?: number;
 }) {
   const names = namesOf(context);
   const { accounts, assets, events } = context;
@@ -584,6 +602,19 @@ function EffectSlots({
         </>
       );
     }
+    case "Spending":
+      return (
+        <>
+          {kind}<span>from</span>{cashAccount("fromAccountId", "Spend from")}<span>using</span>
+          <SpendingSentence
+            effect={effect}
+            context={context}
+            perYear={perYear}
+            disabled={disabled}
+            onChange={onChange}
+          />
+        </>
+      );
     case "Event control":
       return (
         <>
@@ -865,6 +896,9 @@ function EffectDetails({
         </div>
       )}
       {effect.form === "RothConversion" && <ConversionHelp withheld={effect.payTaxFromAccountId === 0} />}
+      {effect.form === "Spending" && (
+        <SpendingDetails effect={effect} context={context} disabled={disabled} onChange={onChange} />
+      )}
       {effect.form === "DeleteAccount" && (
         <Note>
           Removes the account from the plan when this fires, with whatever it still holds — put
@@ -1017,5 +1051,355 @@ function ExpressionActions({
         </Button>
       )}
     </div>
+  );
+}
+
+const RULE_OPTIONS: DropdownOption<SpendingChoice>[] = SPENDING_CHOICES.map((c) => ({
+  value: c.value,
+  label: c.label,
+  detail: c.detail,
+}));
+
+/** A rate field that reads and writes a fraction as a percentage. */
+function RateSlot({
+  value,
+  onValue,
+  label,
+  disabled,
+  max = 100,
+}: {
+  value: number;
+  onValue: (rate: number) => void;
+  label: string;
+  disabled?: boolean;
+  max?: number;
+}) {
+  return (
+    <NumberInput
+      value={Number((value * 100).toFixed(2))}
+      readOnly={disabled}
+      onValueChange={(pct) => onValue(Math.min(max, Math.max(0, pct)) / 100)}
+      decimals={2}
+      min={0}
+      max={max}
+      suffix="%"
+      aria-label={label}
+    />
+  );
+}
+
+/**
+ * Artboard 22 · the spending rule in the effect's sentence: "using
+ * Guardrails, starting at $80,000 a year in today's dollars; cut 10% when the
+ * withdrawal rate rises 20% above where it started…". The rule menu switches
+ * rule keeping the starting amount; Fixed turns the effect back into an
+ * Expense of that amount.
+ */
+function SpendingSentence({
+  effect,
+  context,
+  perYear,
+  disabled,
+  onChange,
+}: {
+  effect: EffectDraft;
+  context: TriggerContext;
+  perYear: number;
+  disabled?: boolean;
+  onChange: (change: Partial<EffectDraft>) => void;
+}) {
+  const rule = spendingRuleOf(effect, perYear);
+  const portfolio = portfolioValue(context.accounts, context.assets, portfolioSpec(effect));
+  const set = (next: SpendingRuleSpec) => onChange({ spendingRule: next });
+  const choose = (choice: SpendingChoice) => {
+    if (choice === "Fixed") {
+      const yearly = startingAmount(rule, portfolio) ?? 0.04 * portfolio;
+      onChange({
+        form: "Expense",
+        amount: Math.round(yearly / perYear),
+        inflationAdjusted: true,
+        rawAmount: undefined,
+        spendingRule: undefined,
+      });
+    } else set(switchRule(rule, choice, portfolio));
+  };
+  const menu = (
+    <Dropdown
+      inline
+      options={RULE_OPTIONS}
+      value={rule.rule as SpendingChoice}
+      ariaLabel="Spending rule"
+      disabled={disabled}
+      onChange={choose}
+    />
+  );
+
+  switch (rule.rule) {
+    case "Guardrails":
+      return (
+        <>
+          {menu}
+          <span>, starting at</span>
+          {rule.initial.kind === "Amount" ? (
+            <>
+              <CurrencyInput
+                value={rule.initial.amount}
+                readOnly={disabled}
+                onValueChange={(amount) => set({ ...rule, initial: { kind: "Amount", amount } })}
+                aria-label="Starting amount a year"
+              />
+              <span>a year in today&apos;s dollars; cut</span>
+            </>
+          ) : (
+            <>
+              <RateSlot
+                value={rule.initial.rate}
+                max={20}
+                label="Starting rate"
+                disabled={disabled}
+                onValue={(rate) => set({ ...rule, initial: { kind: "Rate", rate } })}
+              />
+              <span>of the portfolio; cut</span>
+            </>
+          )}
+          <RateSlot value={rule.step} label="Step" disabled={disabled} onValue={(step) => set({ ...rule, step })} />
+          <span>when the withdrawal rate rises</span>
+          <RateSlot value={rule.band} label="Band" disabled={disabled} onValue={(band) => set({ ...rule, band })} />
+          <span>above where it started, and raise it as much when it falls as far below</span>
+        </>
+      );
+    case "PercentOfPortfolio":
+      return (
+        <>
+          {menu}
+          <span>:</span>
+          <RateSlot value={rule.rate} max={20} label="Rate" disabled={disabled} onValue={(rate) => set({ ...rule, rate })} />
+          <span>of the portfolio each year</span>
+        </>
+      );
+    case "CappedChange":
+      return (
+        <>
+          {menu}
+          <span>: toward</span>
+          <RateSlot value={rule.rate} max={20} label="Rate" disabled={disabled} onValue={(rate) => set({ ...rule, rate })} />
+          <span>of the portfolio, cutting at most</span>
+          <RateSlot value={rule.max_cut} max={99} label="Largest cut" disabled={disabled} onValue={(max_cut) => set({ ...rule, max_cut })} />
+          <span>and raising at most</span>
+          <RateSlot value={rule.max_raise} label="Largest raise" disabled={disabled} onValue={(max_raise) => set({ ...rule, max_raise })} />
+          <span>a year after inflation</span>
+        </>
+      );
+    case "Vpw":
+      return (
+        <>
+          {menu}
+          <span>: spend the portfolio down by age</span>
+          <NumberInput
+            value={rule.final_age}
+            readOnly={disabled}
+            onValueChange={(age) => set({ ...rule, final_age: Math.min(120, Math.max(1, Math.round(age))) })}
+            decimals={0}
+            min={1}
+            max={120}
+            aria-label="Final age"
+          />
+        </>
+      );
+  }
+}
+
+/**
+ * The rule's optional terms, behind More: floor and ceiling, how the first
+ * year is set, the final-years protection, the portfolio it reads and
+ * pass-through.
+ */
+function SpendingDetails({
+  effect,
+  context,
+  disabled,
+  onChange,
+}: {
+  effect: EffectDraft;
+  context: TriggerContext;
+  disabled?: boolean;
+  onChange: (change: Partial<EffectDraft>) => void;
+}) {
+  const rule = spendingRuleOf(effect);
+  const set = (next: SpendingRuleSpec) => onChange({ spendingRule: next });
+  const portfolio = portfolioValue(context.accounts, context.assets);
+  const liquid = context.accounts.filter((a) => a.flavor === "Bank" || a.flavor === "Investment");
+  const payer = context.accounts.find((a) => a.id === effect.fromAccountId)?.name ?? "the paying account";
+  const grid: ReactNode[] = [];
+
+  if (rule.rule === "Guardrails" || rule.rule === "PercentOfPortfolio") {
+    grid.push(
+      <Field key="floor" label="Floor a year (today's $)">
+        <CurrencyInput
+          nullable
+          value={rule.floor}
+          placeholder="none"
+          readOnly={disabled}
+          onValueChange={(floor) => set({ ...rule, floor: floor || null })}
+          aria-label="Floor"
+        />
+      </Field>,
+      <Field key="ceiling" label="Ceiling a year (today's $)">
+        <CurrencyInput
+          nullable
+          value={rule.ceiling}
+          placeholder="none"
+          readOnly={disabled}
+          onValueChange={(ceiling) => set({ ...rule, ceiling: ceiling || null })}
+          aria-label="Ceiling"
+        />
+      </Field>,
+    );
+  }
+  if (rule.rule === "Guardrails") {
+    grid.push(
+      <Field key="start" label="First year">
+        <Dropdown
+          className="dd-field"
+          options={[
+            { value: "Amount", label: "an amount" },
+            { value: "Rate", label: "a share of the portfolio" },
+          ]}
+          value={rule.initial.kind}
+          ariaLabel="First year"
+          disabled={disabled}
+          onChange={(kind) => {
+            if (kind === rule.initial.kind) return;
+            const amount = startingAmount(rule, portfolio) ?? 0;
+            set({
+              ...rule,
+              initial: kind === "Amount"
+                ? { kind: "Amount", amount: Math.round(amount) }
+                : {
+                  kind: "Rate",
+                  rate: portfolio > 0 ? Math.min(0.2, Math.max(0.001, Number((amount / portfolio).toFixed(4)))) : 0.05,
+                },
+            });
+          }}
+        />
+      </Field>,
+      <Field key="protect" label="No cuts in the last">
+        <NumberInput
+          value={rule.protect_final_years}
+          readOnly={disabled}
+          onValueChange={(years) => set({ ...rule, protect_final_years: Math.min(60, Math.max(0, Math.round(years))) })}
+          decimals={0}
+          min={0}
+          max={60}
+          suffix="years"
+          aria-label="Years without cuts at the end"
+        />
+      </Field>,
+    );
+  }
+  if (rule.rule === "Vpw") {
+    grid.push(
+      <Field key="return" label="Real return">
+        <Dropdown
+          className="dd-field"
+          options={[
+            { value: "plan", label: "the plan's assumptions" },
+            { value: "own", label: "my own" },
+          ]}
+          value={rule.real_return == null ? "plan" : "own"}
+          ariaLabel="Real return"
+          disabled={disabled}
+          onChange={(which) => set({ ...rule, real_return: which === "plan" ? null : (rule.real_return ?? 0.03) })}
+        />
+      </Field>,
+    );
+    if (rule.real_return != null) {
+      const own = rule.real_return;
+      grid.push(
+        <Field key="own" label="Return after inflation">
+          <PercentInput
+            value={Number((own * 100).toFixed(2))}
+            readOnly={disabled}
+            onValueChange={(pct) => set({ ...rule, real_return: Math.min(50, Math.max(-50, pct)) / 100 })}
+            aria-label="Return after inflation"
+          />
+        </Field>,
+      );
+    }
+  }
+
+  const togglePortfolio = (id: number, on: boolean) => {
+    const ids = on ? [...effect.portfolioIds, id] : effect.portfolioIds.filter((x) => x !== id);
+    onChange({ portfolioIds: ids.filter((x, i) => ids.indexOf(x) === i) });
+  };
+
+  return (
+    <>
+      <Note>{CHOICE_EXPLAINED[rule.rule]}</Note>
+      {grid.length > 0 && (
+        <Tier>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(170px, 1fr))", gap: 12, flex: 1, minWidth: 0 }}>
+            {grid}
+          </div>
+        </Tier>
+      )}
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        {rule.rule === "Guardrails" && (
+          <label className="radio" style={{ fontSize: 12 }}>
+            <input
+              type="checkbox"
+              checked={rule.skip_inflation_after_loss}
+              disabled={disabled}
+              onChange={(e) => set({ ...rule, skip_inflation_after_loss: e.target.checked })}
+            />
+            <span className="dot" />
+            Skip the inflation raise after a losing year while the rate is above where it started
+          </label>
+        )}
+        <label className="radio" style={{ fontSize: 12 }}>
+          <input
+            type="checkbox"
+            checked={effect.passThrough}
+            disabled={disabled}
+            onChange={(e) => onChange({ passThrough: e.target.checked })}
+          />
+          <span className="dot" />
+          Spend {payer}&apos;s other income (Social Security, a pension) on top of the draw, and take its other
+          expenses out of it
+        </label>
+        <label className="radio" style={{ fontSize: 12 }}>
+          <input
+            type="checkbox"
+            checked={effect.portfolioIds.length === 0}
+            disabled={disabled}
+            onChange={(e) => onChange({ portfolioIds: e.target.checked ? [] : liquid.map((a) => a.id) })}
+          />
+          <span className="dot" />
+          Read the rate against every bank and investment account
+        </label>
+        {effect.portfolioIds.length > 0 && (
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "6px 16px", paddingLeft: 22 }}>
+            {liquid.map((a) => (
+              <label key={a.id} className="radio" style={{ fontSize: 12 }}>
+                <input
+                  type="checkbox"
+                  checked={effect.portfolioIds.includes(a.id)}
+                  disabled={disabled}
+                  onChange={(e) => togglePortfolio(a.id, e.target.checked)}
+                />
+                <span className="dot" />
+                {a.name}
+              </label>
+            ))}
+          </div>
+        )}
+      </div>
+      <Note>
+        The rule decides the year&apos;s draw at its first occurrence that year, from the portfolio then,
+        and each occurrence pays its share. Selling to cover it is the funding policy&apos;s job, with tax paid on
+        top. Results judge a plan like this on funding success and the spending it delivers, not on the
+        money left at the end.
+      </Note>
+    </>
   );
 }

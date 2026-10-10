@@ -257,6 +257,13 @@ pub struct EffectRow {
     /// RothConversion: the account paying the tax; NULL withholds it.
     #[serde(default)]
     pub pay_tax_from_account_id: Option<i64>,
+    /// Spending: the rule, as `SpendingRuleSpec` JSON. Skipped when unset so
+    /// plans without one keep their input hash.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spending_rule: Option<String>,
+    /// Spending: 1 to spend the account's other net flows too.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pass_through: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -1078,3 +1078,26 @@ fn filling_low_brackets_ahead_of_rmds_beats_not_converting_after_tax() {
         rows[0].median_after_tax_ending_balance
     );
 }
+
+/// Spending by a rule (spec 22) instead of the fixed expenses: every year of
+/// every strategy still balances, the draw showing as spending.
+#[test]
+fn a_spending_rule_still_balances_every_year() {
+    let mut graph = default_graph();
+    graph.scenario.duration_years = 25;
+    make(
+        &mut graph,
+        json!({"op": "create_event", "body": {
+            "name": "Retirement spending", "enabled": true,
+            "trigger": {"kind": "Repeating", "interval": "Monthly",
+                        "start_condition": {"kind": "Date", "on_date": "2036-01-01"}},
+            "effects": [{"kind": "Spending", "from_account_id": 6,
+                         "rule": {"rule": "Guardrails",
+                                  "initial": {"kind": "Amount", "amount": 70000.0}}}]}}),
+    );
+    funding(&mut graph, "TaxEfficientEarly");
+    let body = project(&graph, SEED, &DrawdownRequest::default()).unwrap();
+    assert_balanced(&body);
+    let planned = &body.choices[0];
+    assert!(planned.years.iter().all(|y| y.spending > 0.0));
+}

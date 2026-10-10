@@ -89,6 +89,12 @@ export interface Engine {
   ): string;
   /** `seed` is the path's decimal seed, as `PathResults.seed` has it; `request` a `DrawdownRequest`. */
   drawdown(snapshot: string, seed: string, request: string): string;
+  /** `body` is a `SpendingCompareRequest`; the answer a `SpendingComparison`. */
+  spending_compare(
+    snapshot: string,
+    body: string,
+    progress: (done: number, total: number) => boolean | void,
+  ): string;
   /** `body` is a `CompareRequest`; the answer a `DrawdownComparison`. */
   drawdown_compare(
     snapshot: string,

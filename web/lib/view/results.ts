@@ -16,6 +16,7 @@ import type {
 } from "@/lib/types";
 import type { PlanAxis } from "./axis";
 import { yearOf } from "./format.ts";
+import { toSpendingView } from "./spending.ts";
 
 /**
  * Stack colours: the categorical series in their validated order, the same
@@ -120,6 +121,7 @@ export function toResultsData(
     baseDate,
     dollarLabel: isReal ? `${baseDate} dollars (annual inflation)` : "nominal dollars",
     totalInflation: isReal ? finalFactor(path) : Number.NaN,
+    spending: toSpendingView(results.spending, real?.terminal.base_date ?? scenario.start_date, axis.at),
   };
 }
 

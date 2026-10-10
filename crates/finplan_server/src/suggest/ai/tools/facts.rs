@@ -536,13 +536,14 @@ pub const TOPICS: &[&str] = &[
     "social_security",
     "full_retirement_age",
     "state_tax",
+    "spending_rules",
 ];
 
 pub fn schema() -> Value {
     json!({
         "type": "object",
         "properties": {
-            "topic": {"type": "string", "enum": TOPICS, "description": "401k (also 403(b), 457(b), TSP): employee deferral and catch-ups. ira, hsa: limits. contribution_limits: all of them. rmd: start age by birth_year. standard_deduction and tax_brackets: federal, by filing status. social_security: bend points, wage base, full retirement ages. full_retirement_age: by birth_year. state_tax: state income tax rates (approximate)."},
+            "topic": {"type": "string", "enum": TOPICS, "description": "401k (also 403(b), 457(b), TSP): employee deferral and catch-ups. ira, hsa: limits. contribution_limits: all of them. rmd: start age by birth_year. standard_deduction and tax_brackets: federal, by filing status. social_security: bend points, wage base, full retirement ages. full_retirement_age: by birth_year. state_tax: state income tax rates (approximate). spending_rules: the dynamic spending rules a Spending effect can use, with their published defaults."},
             "year": {"type": "integer", "description": "2024, 2025 or 2026 (default 2026). Not used by rmd, full_retirement_age or state_tax."},
             "birth_year": {"type": "integer", "description": "rmd and full_retirement_age: the birth year."},
             "filing_status": {"type": "string", "enum": ["single", "married_filing_jointly", "married_filing_separately", "head_of_household"], "description": "standard_deduction and tax_brackets: one status; omit for all."},
@@ -747,6 +748,20 @@ pub fn run(input: &Value) -> Result<Value, String> {
                 "notes": "APPROXIMATIONS. `flat` is the wage tax rate; `graduated_top_rate` is the top marginal rate, which overstates what most households pay; `no_wage_tax` states may still tax other income. Local income taxes, credits and deductions are not included. Use the rate as a labelled estimate.",
             }))
         }
+        "spending_rules" => Ok(json!({
+            "topic": topic, "status": "published",
+            "source": "Guyton & Klinger (2006); Vanguard dynamic spending; Bogleheads VPW",
+            "facts": {
+                "effect": "EffectSpec Spending { from_account_id, rule: SpendingRuleSpec, portfolio (default Liquid: every bank and investment account), pass_through (default true) } on a Monthly, Quarterly or Yearly repeating event, usually from retirement to the end of the plan. The rule decides one draw a year in today's dollars at the event's first occurrence that year; each occurrence pays its share. With pass_through the paying account's other income (Social Security, pensions) is spent on top and its other expenses come out of the draw, so the portfolio gives up about the draw. Use it in place of a fixed retirement Expense, not beside one.",
+                "rules": [
+                    {"rule": "Guardrails", "what": "Start at an amount (or a rate of the portfolio); raise it for inflation each year; cut it by `step` when the withdrawal rate rises `band` above where it started, raise it by `step` when it falls `band` below; skip the inflation raise after a losing year when the rate is above where it started; no cuts in the last `protect_final_years` years.", "defaults": {"band": 0.20, "step": 0.10, "skip_inflation_after_loss": true, "protect_final_years": 15}, "typical_start_rate": "5% to 5.5% of the portfolio"},
+                    {"rule": "PercentOfPortfolio", "what": "`rate` of the portfolio each year, optionally between a floor and a ceiling in today's dollars. Cannot run out without a floor; swings with the market.", "typical_rate": "4% to 5%"},
+                    {"rule": "CappedChange", "what": "Toward `rate` of the portfolio, moving at most `max_cut` down or `max_raise` up a year after inflation.", "defaults": {"rate": 0.05, "max_cut": 0.025, "max_raise": 0.05}},
+                    {"rule": "Vpw", "what": "The level payment that spends the portfolio down by `final_age` at `real_return` (default: the plan's own expected real return). A high final_age is the safety margin.", "defaults": {"final_age": 100}}
+                ],
+                "results": "A plan with a rule is judged on funding success, median lifetime spending, the 10th-percentile lowest draw and the share of markets with a cut deeper than 10%, not on ending net worth."
+            },
+        })),
         other => Err(format!(
             "unknown topic `{other}`; use one of {}",
             TOPICS.join(", ")

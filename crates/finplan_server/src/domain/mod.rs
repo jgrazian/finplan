@@ -549,9 +549,10 @@ fn copy_effect<'a>(
                  from_account_id, to_account_id, asset_id, amount_id, target_event_id,
                  amount_mode, income_type, lot_method, probability, units, sell_to_cover,
                  loan_account_id, down_payment_amount_id, term_months, selling_cost_rate,
-                 gain_exclusion, shock_drop, pay_tax_from_account_id)
+                 gain_exclusion, shock_drop, pay_tax_from_account_id, spending_rule,
+                 pass_through)
              VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,
-                     ?18,?19,?20,?21,?22,?23,?24)
+                     ?18,?19,?20,?21,?22,?23,?24,?25,?26)
              RETURNING id",
         )
         .bind(scenario_id)
@@ -606,6 +607,8 @@ fn copy_effect<'a>(
                 .map(|id| remap(accounts, id, "account"))
                 .transpose()?,
         )
+        .bind(&row.spending_rule)
+        .bind(row.pass_through)
         .fetch_one(&mut **tx)
         .await?;
 

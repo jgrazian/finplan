@@ -18,6 +18,7 @@ mod catalogue;
 mod plan;
 mod portfolio;
 mod results;
+mod spending;
 
 #[cfg(test)]
 mod tests;
@@ -210,6 +211,8 @@ const RULES: &[(&str, Rule)] = &[
         results::shortfall_account_concentration,
     ),
     ("success_vs_funding_gap", results::success_vs_funding_gap),
+    ("fixed_spending_stress", spending::fixed_spending_stress),
+    ("spending_rule_no_floor", spending::spending_rule_no_floor),
 ];
 
 /// The id of every rule [`review`] runs, in the order it runs them.

@@ -7,6 +7,7 @@ use crate::model::AssetCoord;
 
 use super::accounts::Account;
 use super::ids::{AccountId, AssetId, EventId, ParameterId};
+use super::spending::{SpendingPortfolio, SpendingRule};
 
 use serde::{Deserialize, Serialize};
 
@@ -22,6 +23,17 @@ pub enum RepeatInterval {
 }
 
 impl RepeatInterval {
+    /// Occurrences in a year, for the intervals a `Spending` effect accepts.
+    #[must_use]
+    pub fn per_year(&self) -> Option<u32> {
+        match self {
+            RepeatInterval::Monthly => Some(12),
+            RepeatInterval::Quarterly => Some(4),
+            RepeatInterval::Yearly => Some(1),
+            _ => None,
+        }
+    }
+
     /// Fast date advancement without going through `jiff::Span`.
     #[must_use]
     #[inline]
@@ -519,6 +531,26 @@ pub enum EventEffect {
         payoff: Option<AccountId>,
     },
 
+    // === Dynamic Spending ===
+    /// Retirement spending decided by a rule once a calendar year (spec 22).
+    ///
+    /// Belongs to a `Repeating` event at a `Monthly`, `Quarterly` or `Yearly`
+    /// interval. The rule decides the year's draw `W` at the event's first
+    /// occurrence in the year, from the portfolio's balance then; each
+    /// occurrence pays `W / n` (`n` = 12, 4 or 1) out of `from` as an expense.
+    /// With `pass_through`, an occurrence also spends the net of every other
+    /// income and expense through `from` since the previous one, never less
+    /// than nothing in all, so the portfolio still gives up about `W`.
+    Spending {
+        from: AccountId,
+        rule: SpendingRule,
+        #[serde(default)]
+        portfolio: SpendingPortfolio,
+        /// Spend the plan's other net cash flows through `from` as well.
+        #[serde(default = "pass_through_default")]
+        pass_through: bool,
+    },
+
     // === Market Events ===
     /// A one-time crash: the price of every *market* asset drops by `drop`
     /// (a fraction, `0.3` = −30%) at the moment the event fires, and keeps
@@ -552,6 +584,10 @@ pub enum EventEffect {
         #[serde(default)]
         lot_method: LotMethod,
     },
+}
+
+fn pass_through_default() -> bool {
+    true
 }
 
 /// How a `BuyProperty` is financed.

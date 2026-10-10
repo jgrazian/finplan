@@ -413,6 +413,9 @@ pub enum EvalEvent {
     TerminateEvent(EventId),
 
     StateEvent(StateEvent),
+
+    /// A `Spending` occurrence's debit and the rule state it leaves.
+    Spending(crate::spending::Spend),
 }
 
 /// Apply a single effect to the simulation state
@@ -424,6 +427,25 @@ pub fn evaluate_effect(
     let mut out = Vec::new();
     evaluate_effect_into(effect, state, &mut out)?;
     Ok(out)
+}
+
+/// Evaluate the effect at `effect_index` of `event_id`: what an event's own
+/// effects go through. A `Spending` effect needs to know which one it is (its
+/// rule keeps state per effect); every other effect is
+/// [`evaluate_effect_into`].
+pub fn evaluate_event_effect_into(
+    event_id: EventId,
+    effect_index: usize,
+    effect: &EventEffect,
+    state: &SimulationState,
+    out: &mut Vec<EvalEvent>,
+) -> Result<(), StateEventError> {
+    match effect {
+        EventEffect::Spending { .. } => {
+            crate::spending::evaluate(event_id, effect_index, state, out)
+        }
+        _ => evaluate_effect_into(effect, state, out),
+    }
 }
 
 /// Apply a single effect to the simulation state, appending results to the provided buffer
@@ -1258,6 +1280,10 @@ pub fn evaluate_effect_into(
             }
             Ok(())
         }
+
+        EventEffect::Spending { .. } => Err(StateEventError::Unsupported(
+            "a Spending effect runs only as one of a repeating event's own effects",
+        )),
 
         EventEffect::MarketShock { drop } => {
             let drop = if drop.is_finite() {

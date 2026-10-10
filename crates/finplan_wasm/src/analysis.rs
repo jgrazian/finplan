@@ -344,6 +344,7 @@ fn placeholder(mc: &MonteCarloConfig) -> StatsRun {
         converged: None,
         convergence_metric: None,
         convergence_value: None,
+        spending: None,
     };
     (stats, mc.percentiles.iter().map(|&p| (p, 0)).collect())
 }
@@ -698,6 +699,25 @@ pub fn drawdown_json(snapshot: &str, seed: &str, request: &str) -> EngineResult<
         .map_err(|_| EngineError::bad_request("seed is not a whole number"))?;
     let request: DrawdownRequest = parse("drawdown request", request)?;
     to_json(&drawdown::project(&graph, seed, &request)?)
+}
+
+/// `POST /runs/{id}/spending/compare` (spec 22): a Monte Carlo per spending
+/// rule on one common seed. `body` is a `SpendingCompareRequest`; `progress`
+/// is called with `(simulations done, expected)`. A `SpendingComparison` JSON.
+pub fn spending_compare_json(
+    snapshot: &str,
+    body: &str,
+    progress: Progress<'_>,
+) -> EngineResult<String> {
+    let graph: ScenarioGraph = parse("snapshot", snapshot)?;
+    let body: finplan_plan::spending::SpendingCompareRequest =
+        parse("spending comparison request", body)?;
+    let mut runner = Local::new(progress);
+    to_json(&finplan_plan::spending::compare(
+        &graph,
+        &body,
+        &mut runner,
+    )?)
 }
 
 /// `POST /runs/{id}/drawdown/compare`: a Monte Carlo per strategy on one common

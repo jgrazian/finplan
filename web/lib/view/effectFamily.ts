@@ -13,6 +13,7 @@ const FAMILY: Record<EffectKind, EffectFamily> = {
   AssetSale: "inflow",
   SellProperty: "inflow",
   Expense: "outflow",
+  Spending: "outflow",
   BuyProperty: "outflow",
   CashTransfer: "transfer",
   Sweep: "transfer",

@@ -44,6 +44,10 @@ pub struct SimulationState {
 
     /// Sells investments to cover cash deficits at each settle step
     pub funding: Option<crate::model::FundingPolicy>,
+
+    /// What `Spending` effects remember across years; `None` on a plan
+    /// without one.
+    pub spending: Option<Box<crate::spending::SpendingTracker>>,
 }
 
 #[derive(Debug, Clone)]
@@ -609,9 +613,13 @@ impl SimulationState {
             rng: RefCell::new(effect_rng),
             collect_ledger: params.collect_ledger,
             funding: params.funding.clone(),
+            spending: None,
         };
         // The first tax year never rolls over, so build its brackets here.
         state.index_federal_brackets(start_date.year());
+        if crate::spending::has_spending(&params.events) {
+            state.spending = Some(Box::new(crate::spending::SpendingTracker::new(&state)));
+        }
         Ok(state)
     }
 
@@ -1095,6 +1103,7 @@ fn bind_effect_parameters(
         | EventEffect::ApplyRmd { .. }
         | EventEffect::SellProperty { .. }
         | EventEffect::MarketShock { .. }
+        | EventEffect::Spending { .. }
         | EventEffect::RsuVesting { .. } => Ok(()),
     }
 }

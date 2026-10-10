@@ -110,6 +110,7 @@ fn results() -> Results {
             .map(|year| InflationPoint { year, factor: 1.0 })
             .collect(),
         ledger_years: Vec::new(),
+        spending: None,
         funding_diagnostics: Some(FundingDiagnostics {
             iterations: 2000,
             failed: 189,

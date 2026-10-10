@@ -329,6 +329,13 @@ impl EventListPanel {
                     Self::format_amount_short(amount)
                 )
             }
+            EffectData::Spending { from, rule, .. } => {
+                format!(
+                    "Spend from {}: {}",
+                    from.0,
+                    crate::data::events_data::describe_spending_rule(rule)
+                )
+            }
             EffectData::RothConversion {
                 from, to, amount, ..
             } => {

@@ -6,7 +6,7 @@
 use crate::{
     error::{AccountTypeError, ApplyError, LookupError},
     evaluate::{
-        EvalEvent, TriggerEvent, evaluate_effect_into, evaluate_trigger, point_in_time_target,
+        EvalEvent, TriggerEvent, evaluate_event_effect_into, evaluate_trigger, point_in_time_target,
     },
     model::{
         AccountFlavor, AccountId, AssetLot, CashFlowKind, ConversionTranche, EventId, EventTrigger,
@@ -78,6 +78,20 @@ pub fn apply_eval_event_with_source(
     let current_date = state.timeline.current_date;
 
     match event {
+        EvalEvent::Spending(spend) => {
+            let amount = crate::spending::apply_spend(state, spend)?;
+            record_ledger_entry(
+                state,
+                current_date,
+                source_event,
+                StateEvent::CashDebit {
+                    from: spend.from,
+                    amount,
+                    kind: CashFlowKind::Expense,
+                },
+            );
+            Ok(())
+        }
         EvalEvent::StateEvent(event) => {
             // An RMD taken this year lets the year's conversions go ahead.
             if let StateEvent::RmdWithdrawal { account_id, .. } = event {
@@ -138,6 +152,12 @@ pub fn apply_eval_event_with_source(
                 }
             }
 
+            if *kind == CashFlowKind::Income
+                && let Some(tracker) = state.spending.as_mut()
+            {
+                tracker.observe_flow(*to, *net_amount, current_date);
+            }
+
             // Record to ledger
             let ledger_event = StateEvent::CashCredit {
                 to: *to,
@@ -179,6 +199,13 @@ pub fn apply_eval_event_with_source(
                         *from,
                     )));
                 }
+            }
+
+            if matches!(kind, CashFlowKind::Expense | CashFlowKind::DebtPayment)
+                && let Some(tracker) = state.spending.as_mut()
+            {
+                tracker.observe_flow(*from, -net_amount, current_date);
+                tracker.add_spending(current_date.year(), *net_amount);
             }
 
             // Record to ledger
@@ -614,7 +641,8 @@ pub fn apply_eval_event_with_source(
             let factor = 1.0 - drop;
             // What the drop takes from each account's holdings is growth like
             // any other price move, so the ledger carries it the same way.
-            let before = state.collect_ledger.then(|| holdings_values(state));
+            let before =
+                (state.collect_ledger || state.spending.is_some()).then(|| holdings_values(state));
             let mut shocked = Vec::with_capacity(assets.len());
             for asset in assets {
                 if state.portfolio.market.scale_asset_price(*asset, factor) {
@@ -636,6 +664,9 @@ pub fn apply_eval_event_with_source(
                     state.timeline.start_date,
                     current_date,
                 );
+                if let Some(tracker) = state.spending.as_mut() {
+                    tracker.add_growth(current_date.year(), account_id, new_value - previous_value);
+                }
                 if (new_value - previous_value).abs() > 0.001 {
                     record_ledger_entry(
                         state,
@@ -994,7 +1025,13 @@ pub fn process_events_with_scratch(state: &mut SimulationState, scratch: &mut Si
                         break;
                     };
                     // Evaluate while holding effect borrow
-                    evaluate_effect_into(effect, state, &mut scratch.eval_events)
+                    evaluate_event_effect_into(
+                        event_id,
+                        effect_idx,
+                        effect,
+                        state,
+                        &mut scratch.eval_events,
+                    )
                 }; // effect borrow ends here
 
                 // Phase 2: Apply with mutable borrow
@@ -1083,7 +1120,13 @@ pub fn process_events_with_scratch(state: &mut SimulationState, scratch: &mut Si
                     else {
                         break;
                     };
-                    evaluate_effect_into(effect, state, &mut scratch.eval_events)
+                    evaluate_event_effect_into(
+                        event_id,
+                        effect_idx,
+                        effect,
+                        state,
+                        &mut scratch.eval_events,
+                    )
                 }; // effect borrow ends here
 
                 // Chained effects must report the same failures as scheduled effects;

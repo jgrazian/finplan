@@ -59,6 +59,11 @@ pub struct SetupPlan {
     pub tax_config_id: Option<i64>,
     pub fund_from_investments: bool,
     pub assumptions_confirmed: bool,
+    /// Retirement spending that adjusts with the market (spec 22): the rule
+    /// it follows. Absent, retirement spending is the fixed expense.
+    #[serde(default)]
+    #[ts(optional)]
+    pub retirement_spending_rule: Option<crate::specs::SpendingRuleSpec>,
 }
 
 /// Check the answers, as `POST /scenarios/setup` does before it writes anything.
@@ -260,7 +265,7 @@ pub fn lower(p: &SetupPlan, annual_401k_contribution: f64) -> PlanResult<Vec<Cha
             }),
         ));
     }
-    for (prefix, name, amount, amount_parameter, sort_order, start, end) in [
+    for (prefix, name, amount, amount_parameter, sort_order, start, end, rule) in [
         (
             "before_",
             "Spending before retirement",
@@ -269,6 +274,7 @@ pub fn lower(p: &SetupPlan, annual_401k_contribution: f64) -> PlanResult<Vec<Cha
             1,
             None,
             Some(age()),
+            None,
         ),
         (
             "after_",
@@ -278,6 +284,7 @@ pub fn lower(p: &SetupPlan, annual_401k_contribution: f64) -> PlanResult<Vec<Cha
             2,
             Some(age()),
             None,
+            p.retirement_spending_rule.clone(),
         ),
     ] {
         if amount > 0. {
@@ -297,6 +304,7 @@ pub fn lower(p: &SetupPlan, annual_401k_contribution: f64) -> PlanResult<Vec<Cha
                     // expenses carry no Sweep of their own.
                     fund_from_investments: false,
                     sort_order: Some(sort_order),
+                    rule,
                 }),
             ));
         }
@@ -402,7 +410,35 @@ mod tests {
             tax_config_id: None,
             fund_from_investments: true,
             assumptions_confirmed: true,
+            retirement_spending_rule: None,
         }
+    }
+
+    /// Retirement spending that adjusts with the market is one monthly
+    /// `Spending` effect from the retirement age, and the plan still runs.
+    #[test]
+    fn retirement_spending_can_follow_guardrails() {
+        let library = crate::library::seed();
+        let mut a = answers(&library);
+        a.retirement_spending_rule = Some(crate::specs::SpendingRuleSpec::guardrails(55_000.0));
+        let plan = create_plan(&a, &library, 3, "2026-10-03 12:00:00").unwrap();
+        let spending: Vec<_> = plan
+            .effects
+            .values()
+            .filter(|e| e.kind == "Spending")
+            .collect();
+        assert_eq!(spending.len(), 1);
+        assert!(!plan.effects.values().any(|e| {
+            e.kind == "Expense"
+                && plan
+                    .events
+                    .iter()
+                    .any(|v| Some(v.id) == e.event_id && v.name == "Retirement spending")
+        }));
+        let config = compile(&plan)
+            .expect("a guided plan with a rule runs")
+            .config;
+        finplan_core::simulation::simulate(&config, 7).unwrap();
     }
 
     #[test]

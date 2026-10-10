@@ -316,6 +316,20 @@ fn effect_amount(effect: &EffectSpec) -> Option<&AmountSpec> {
 }
 
 pub fn validate_tree(graph: &ScenarioGraph, effects: &[EffectSpec]) -> PlanResult<()> {
+    // The event's interval and VPW's age need the event's trigger: the
+    // lowering and the compile check those.
+    for effect in effects {
+        if let EffectSpec::Spending {
+            from_account_id,
+            rule,
+            portfolio,
+            ..
+        } = effect
+        {
+            compile::check_spending(graph, Some(0), *from_account_id, rule, portfolio)
+                .map_err(|e| PlanError::invalid(e.to_string()))?;
+        }
+    }
     fn one(graph: &ScenarioGraph, effect: &EffectSpec) -> PlanResult<()> {
         if let EffectSpec::RothConversion {
             from_account_id,
@@ -336,8 +350,13 @@ pub fn validate_tree(graph: &ScenarioGraph, effects: &[EffectSpec]) -> PlanResul
             on_true, on_false, ..
         } = effect
         {
-            one(graph, on_true)?;
-            if let Some(child) = on_false {
+            let branches = std::iter::once(on_true.as_ref()).chain(on_false.as_deref());
+            for child in branches {
+                if matches!(child, EffectSpec::Spending { .. }) {
+                    return Err(PlanError::invalid(
+                        "a Spending effect belongs to an event itself, not to a random branch",
+                    ));
+                }
                 one(graph, child)?;
             }
         }

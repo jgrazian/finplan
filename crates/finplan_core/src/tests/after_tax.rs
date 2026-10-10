@@ -189,6 +189,7 @@ fn solve_can_maximise_the_after_tax_median() {
             metric: SolveConstraintMetric::SuccessRate,
             min_value: 0.95,
         },
+        also: Vec::new(),
         mc_iterations: 8,
         parallel_batches: 1,
         seed: Some(7),

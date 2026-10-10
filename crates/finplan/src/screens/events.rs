@@ -717,6 +717,29 @@ impl EventsScreen {
                     Self::format_amount(amount)
                 )
             }
+            EffectData::Spending {
+                from,
+                rule,
+                portfolio,
+                pass_through,
+            } => format!(
+                "Spend from \"{}\" by {}{}{} (edit on the web)",
+                from.0,
+                crate::data::events_data::describe_spending_rule(rule),
+                if portfolio.is_empty() {
+                    String::new()
+                } else {
+                    format!(
+                        ", reading {}",
+                        portfolio
+                            .iter()
+                            .map(|t| format!("\"{}\"", t.0))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
+                },
+                if *pass_through { "" } else { ", draw only" }
+            ),
             EffectData::RothConversion {
                 from,
                 to,

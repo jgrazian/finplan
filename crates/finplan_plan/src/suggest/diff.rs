@@ -581,6 +581,14 @@ fn key_label(key: &str) -> String {
         "payoff_account_id" => "pays off",
         "loan_account_id" => "loan",
         "pay_tax_from_account_id" => "pays tax from",
+        "pass_through" => "spends other income and expenses",
+        "protect_final_years" => "no cuts in the final years",
+        "skip_inflation_after_loss" => "skips the raise after a loss",
+        "max_cut" => "largest cut",
+        "max_raise" => "largest raise",
+        "real_return" => "real return",
+        "final_age" => "spend down by age",
+        "account_ids" => "accounts",
         "start_condition" => "starts",
         "end_condition" => "ends",
         "on_true" => "if true",
@@ -623,7 +631,8 @@ fn format_of(key: &str) -> Format {
         | "payoff_account_id"
         | "loan_account_id"
         | "pay_tax_from_account_id"
-        | "exclude_accounts" => Format::Account,
+        | "exclude_accounts"
+        | "account_ids" => Format::Account,
         "asset_id" => Format::Asset,
         "event_id" | "target_event_id" => Format::Event,
         "return_profile_id" | "cash_return_profile_id" => Format::Profile,
@@ -631,9 +640,11 @@ fn format_of(key: &str) -> Format {
         "tax_config_id" => Format::TaxConfig,
         "inflation_profile_id" => Format::Inflation,
         "threshold" | "cash_value" | "principal" | "cost_basis" | "initial_price"
-        | "contribution_limit" | "gain_exclusion" => Format::Money,
+        | "contribution_limit" | "gain_exclusion" | "floor" | "ceiling" => Format::Money,
         "interest_rate" | "drop" | "probability" | "selling_cost_rate" | "tracking_error"
-        | "bracket_ceiling" => Format::Percent,
+        | "bracket_ceiling" | "band" | "step" | "max_cut" | "max_raise" | "real_return" => {
+            Format::Percent
+        }
         "term_months" => Format::Months,
         _ => Format::Plain,
     }
@@ -920,6 +931,43 @@ fn render_effect(value: &Value, names: &Names) -> String {
                 format!("from {}", account("pay_tax_from_account_id"))
             }
         ),
+        "Spending" => {
+            let rule = field(value, "rule");
+            let rate = |key: &str| percent(field(rule, key).as_f64().unwrap_or_default());
+            let how = match field(rule, "rule").as_str().unwrap_or_default() {
+                "Guardrails" => {
+                    let initial = field(rule, "initial");
+                    let start = match field(initial, "kind").as_str() {
+                        Some("Rate") => format!(
+                            "{} of the portfolio",
+                            percent(field(initial, "rate").as_f64().unwrap_or_default())
+                        ),
+                        _ => format!(
+                            "{} a year",
+                            money(field(initial, "amount").as_f64().unwrap_or_default())
+                        ),
+                    };
+                    format!(
+                        "guardrails from {start}, ±{} band, {} steps",
+                        rate("band"),
+                        rate("step")
+                    )
+                }
+                "PercentOfPortfolio" => format!("{} of the portfolio", rate("rate")),
+                "CappedChange" => format!(
+                    "{} of the portfolio, −{}/+{} a year",
+                    rate("rate"),
+                    rate("max_cut"),
+                    rate("max_raise")
+                ),
+                "Vpw" => format!(
+                    "VPW to age {}",
+                    field(rule, "final_age").as_u64().unwrap_or(100)
+                ),
+                other => other.to_string(),
+            };
+            format!("Spend from {} by {how}", account("from_account_id"))
+        }
         _ => value.to_string(),
     }
 }

@@ -164,6 +164,7 @@ fn results() -> Results {
             })
             .collect(),
         ledger_years: Vec::new(),
+        spending: None,
         funding_diagnostics: Some(FundingDiagnostics {
             iterations: 2000,
             failed: 189,
@@ -1081,6 +1082,7 @@ fn rmd_surplus_plan(rmds_into: &str) -> (ScenarioGraph, i64, i64) {
         ),
     ];
     let spending = Template::RecurringExpense(RecurringExpenseParams {
+        rule: None,
         name: "Spending".into(),
         from_account_id: RowRef::new("checking"),
         amount: 40e3,
@@ -1294,6 +1296,7 @@ fn conversion_plan(roth: bool, k401: f64, years: i64) -> ScenarioGraph {
         ));
     }
     let spending = Template::RecurringExpense(RecurringExpenseParams {
+        rule: None,
         name: "Spending".into(),
         from_account_id: RowRef::new("checking"),
         amount: 90e3,
@@ -1720,4 +1723,98 @@ fn a_silenced_note_is_not_raised_again() {
             .iter()
             .all(|n| n.title != first.suggestions[0].title)
     );
+}
+
+// ── spending rules (spec 22) ────────────────────────────────────────────────
+
+/// The default plan with `effect` paid monthly from USAA from 2036, in an
+/// event named for retirement. Returns the plan and the event's id.
+fn retiring_on(effect: serde_json::Value) -> (ScenarioGraph, i64) {
+    let mut g = graph();
+    let op: crate::edit::EditOp = serde_json::from_value(json!({"op": "create_event", "body": {
+        "name": "Retirement spending", "enabled": true,
+        "trigger": {"kind": "Repeating", "interval": "Monthly",
+                    "start_condition": {"kind": "Date", "on_date": "2036-01-01"}},
+        "effects": [effect]}}))
+    .unwrap();
+    let id = crate::edit::apply(&mut g, &op).unwrap().id.unwrap();
+    (g, id)
+}
+
+#[test]
+fn fixed_spending_under_stress_is_offered_guardrails() {
+    // $240k a year from 2036 is about 6% of the liquid portfolio then.
+    let (g, event) = retiring_on(json!({"kind": "Expense", "from_account_id": 6,
+        "amount": {"kind": "Expression", "source": "inflation(20000)"}}));
+    let mut r = results();
+    r.stats.funding_success_rate = Some(0.7);
+    let drafts = review(&g, &r);
+    let found: Vec<&Draft> = drafts
+        .iter()
+        .filter(|d| d.rule == "fixed_spending_stress")
+        .collect();
+    assert_eq!(found.len(), 1, "{drafts:#?}");
+    let note = found[0];
+    assert!(note.title.contains("Retirement spending"), "{}", note.title);
+    let change = &note.paths[0].steps[0].changes[0];
+    assert_eq!(change.target, ChangeTarget::Event(event));
+    assert_eq!(change.path, "/effects/0");
+    let value = change.value.as_ref().unwrap();
+    assert_eq!(value["kind"], "Spending");
+    assert_eq!(value["rule"]["initial"]["amount"], 240_000.0);
+    assert_changes_resolve(&g, &drafts);
+
+    // Funded often enough, or already spending by a rule: no note.
+    r.stats.funding_success_rate = Some(0.9);
+    assert!(!rules_of(&review(&g, &r)).contains_key("fixed_spending_stress"));
+    r.stats.funding_success_rate = Some(0.7);
+    let (ruled, _) = retiring_on(json!({"kind": "Spending", "from_account_id": 6,
+        "rule": {"rule": "Guardrails", "initial": {"kind": "Amount", "amount": 240000.0}}}));
+    assert!(!rules_of(&review(&ruled, &r)).contains_key("fixed_spending_stress"));
+    // A modest draw is not under stress.
+    let (modest, _) = retiring_on(json!({"kind": "Expense", "from_account_id": 6,
+        "amount": {"kind": "Expression", "source": "inflation(5000)"}}));
+    assert!(!rules_of(&review(&modest, &r)).contains_key("fixed_spending_stress"));
+}
+
+fn spending_results(first: f64, lowest: f64) -> crate::results::view::SpendingResults {
+    crate::results::view::SpendingResults {
+        num_iterations: 2000,
+        median_lifetime_spending: first * 30.0,
+        p10_lowest_draw: lowest,
+        cut_rate: 0.4,
+        median_years_below_first: 3.0,
+        median_first_draw: first,
+        rules: vec!["Guardrails".into()],
+        cut_cap: None,
+        points: Vec::new(),
+    }
+}
+
+#[test]
+fn a_rule_that_cuts_below_half_is_offered_a_floor() {
+    let (g, event) = retiring_on(json!({"kind": "Spending", "from_account_id": 6,
+        "rule": {"rule": "Guardrails", "initial": {"kind": "Amount", "amount": 90000.0}}}));
+    let mut r = results();
+    r.spending = Some(spending_results(90_000.0, 38_000.0));
+    let drafts = review(&g, &r);
+    let found: Vec<&Draft> = drafts
+        .iter()
+        .filter(|d| d.rule == "spending_rule_no_floor")
+        .collect();
+    assert_eq!(found.len(), 1, "{drafts:#?}");
+    let change = &found[0].paths[0].steps[0].changes[0];
+    assert_eq!(change.target, ChangeTarget::Event(event));
+    assert_eq!(change.path, "/effects/0/rule/floor");
+    assert_eq!(change.value, Some(json!(60_000.0)));
+    assert_changes_resolve(&g, &drafts);
+
+    // Shallow cuts, or a floor already set: no note.
+    r.spending = Some(spending_results(90_000.0, 50_000.0));
+    assert!(!rules_of(&review(&g, &r)).contains_key("spending_rule_no_floor"));
+    r.spending = Some(spending_results(90_000.0, 38_000.0));
+    let (floored, _) = retiring_on(json!({"kind": "Spending", "from_account_id": 6,
+        "rule": {"rule": "Guardrails", "initial": {"kind": "Amount", "amount": 90000.0},
+                 "floor": 40000.0}}));
+    assert!(!rules_of(&review(&floored, &r)).contains_key("spending_rule_no_floor"));
 }

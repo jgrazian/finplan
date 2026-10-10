@@ -24,6 +24,63 @@ pub enum EffectParam {
     Value,
     /// Replace the literal scalar factor of a root multiplication expression.
     Multiplier,
+    /// One term of a `Spending` effect's rule (spec 22).
+    SpendingRule(SpendingField),
+}
+
+/// The terms of a spending rule a sweep, a sensitivity row or a solve can
+/// vary. Each applies to the rules that have it; any other is a config error.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum SpendingField {
+    /// Percent of portfolio and Capped change's rate, or a Guardrails rule's
+    /// starting rate.
+    Rate,
+    /// A Guardrails rule's starting amount, in plan-start dollars.
+    InitialAmount,
+    /// Guardrails' band.
+    Band,
+    /// Guardrails' step.
+    Step,
+    /// Guardrails' or Percent of portfolio's floor, in plan-start dollars.
+    Floor,
+}
+
+impl SpendingField {
+    /// `rule` with this term set to `value`, or why the rule has no such term.
+    pub fn apply(
+        self,
+        rule: &crate::model::SpendingRule,
+        value: f64,
+    ) -> Result<crate::model::SpendingRule, String> {
+        use crate::model::{SpendingInitial, SpendingRule};
+        if !value.is_finite() {
+            return Err("a spending rule term must be finite".into());
+        }
+        let mut rule = rule.clone();
+        let missing = || format!("this spending rule has no {self:?} term");
+        match (&mut rule, self) {
+            (
+                SpendingRule::PercentOfPortfolio { rate, .. }
+                | SpendingRule::CappedChange { rate, .. },
+                SpendingField::Rate,
+            ) => *rate = value,
+            (SpendingRule::Guardrails { initial, .. }, SpendingField::Rate) => {
+                *initial = SpendingInitial::Rate(value);
+            }
+            (SpendingRule::Guardrails { initial, .. }, SpendingField::InitialAmount) => {
+                *initial = SpendingInitial::Amount(value);
+            }
+            (SpendingRule::Guardrails { band, .. }, SpendingField::Band) => *band = value,
+            (SpendingRule::Guardrails { step, .. }, SpendingField::Step) => *step = value,
+            (
+                SpendingRule::Guardrails { floor, .. }
+                | SpendingRule::PercentOfPortfolio { floor, .. },
+                SpendingField::Floor,
+            ) => *floor = Some(value),
+            _ => return Err(missing()),
+        }
+        Ok(rule)
+    }
 }
 
 /// Specifies which effect to target within an event

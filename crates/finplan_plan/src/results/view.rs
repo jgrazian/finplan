@@ -239,6 +239,45 @@ pub struct Results {
     /// failed, over the whole run rather than the shown path. Kept for
     /// superseded runs too. Null for runs stored before it was measured.
     pub funding_diagnostics: Option<FundingDiagnostics>,
+    /// What the plan's spending rule spent, over every iteration (spec 22).
+    /// Absent unless the plan has a `Spending` effect.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub spending: Option<SpendingResults>,
+}
+
+/// How a plan with a spending rule spent across every iteration, in today's
+/// (plan-start) dollars.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct SpendingResults {
+    pub num_iterations: i64,
+    /// Median over paths of the lifetime total of the rule's draws.
+    pub median_lifetime_spending: f64,
+    /// The 10th percentile over paths of each path's lowest yearly draw:
+    /// "in 1 market in 10, your draw dips to this".
+    pub p10_lowest_draw: f64,
+    /// Share of paths whose largest year-over-year cut in the real draw
+    /// exceeds 10%.
+    pub cut_rate: f64,
+    /// Median over paths of the years spent below 90% of the first draw.
+    pub median_years_below_first: f64,
+    /// Median first-year draw.
+    pub median_first_draw: f64,
+    /// The plan's spending rules by name ("Guardrails", "VPW"), in event
+    /// order: what the figures above describe. Empty on runs stored before
+    /// it was kept.
+    #[serde(default)]
+    pub rules: Vec<String>,
+    /// Set when every rule caps its own yearly cut (Capped change): the
+    /// largest cap. A cut deeper than it cannot happen, so a screen need
+    /// not count cuts deeper than 10% when this is 10% or less.
+    #[serde(default)]
+    pub cut_cap: Option<f64>,
+    /// Total spending (expenses, draws and loan payments) per year, real,
+    /// pointwise quantiles over every iteration. One point per plan year,
+    /// dated where that year closes on the net-worth fan.
+    pub points: Vec<RealQuantilePoint>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]

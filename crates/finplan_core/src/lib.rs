@@ -48,6 +48,7 @@ pub mod metrics;
 pub mod optimization;
 pub mod simulation;
 pub mod simulation_state;
+pub mod spending;
 pub mod taxes;
 
 // ============================================================================

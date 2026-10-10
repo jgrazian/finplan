@@ -7,6 +7,7 @@ mod parameters;
 mod records;
 mod results;
 mod rmd;
+mod spending;
 mod state_event;
 mod tax_config;
 
@@ -36,5 +37,9 @@ pub use results::{
     WealthSnapshot, YearlyCashFlowSummary, after_tax_final_net_worth, final_net_worth,
 };
 pub use rmd::{RmdTable, RmdTableEntry};
+pub use spending::{
+    RealSpendingSummary, SpendingAccumulator, SpendingDiagnostics, SpendingInitial, SpendingInputs,
+    SpendingPortfolio, SpendingRule, SpendingRuleState, SpendingStats, pmt,
+};
 pub use state_event::{CashFlowKind, LedgerEntry, StateEvent, TaxedIncome};
 pub use tax_config::{TaxBracket, TaxConfig, TaxSummary};

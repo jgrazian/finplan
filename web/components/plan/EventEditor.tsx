@@ -29,6 +29,7 @@ import {
   changedFields,
   draftOfEvent,
   pendingCount,
+  spendingPerYear,
 } from "./eventDraft";
 
 export type { EventDraft } from "./eventDraft";
@@ -312,6 +313,7 @@ export function EventEditor({
             effects={draft.effects}
             context={context}
             disabled={offline}
+            perYear={spendingPerYear(draft.trigger) ?? 1}
             onChange={(effects) => set("effects", effects)}
           />
           {(() => {

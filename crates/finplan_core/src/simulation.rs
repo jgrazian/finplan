@@ -1,7 +1,7 @@
 use rustc_hash::FxHashMap;
 
 mod quantiles;
-pub use quantiles::RealAccumulator;
+pub use quantiles::{RealAccumulator, RealSpendingAccumulator};
 
 use crate::apply::{SimulationScratch, apply_eval_event, process_events_with_scratch};
 use crate::config::SimulationConfig;
@@ -246,6 +246,14 @@ fn build_simulation_result(state: &mut SimulationState) -> SimulationResult {
                 .sum()
         });
     let deferred_exit_tax = state.deferred_exit_tax(deferred_balance);
+    if let Some(tracker) = &state.spending {
+        // The last calendar year with a day inside the plan.
+        let end = state.timeline.end_date;
+        let last_year = end.yesterday().unwrap_or(end).year();
+        let (spending, real_by_year) = tracker.finish(last_year, &cumulative_inflation);
+        state.diagnostics.spending = spending;
+        state.diagnostics.real_spending_by_year = real_by_year;
+    }
 
     let mut result = SimulationResult {
         wealth_snapshots: std::mem::take(&mut state.portfolio.wealth_snapshots),
@@ -685,14 +693,27 @@ fn compound_accounts(
     let market = &state.portfolio.market;
     let collect_ledger = state.collect_ledger;
     let ledger = &mut state.history.ledger;
+    // A spending rule reads each liquid account's market growth.
+    let mut tracker = state.spending.as_deref_mut();
+    let growth_year = next_checkpoint.year();
 
     for (&account_id, account) in &mut state.portfolio.accounts {
+        let track = tracker.is_some() && account.is_liquid();
+        let cash_before = if track {
+            account.cash_balance().unwrap_or(0.0)
+        } else {
+            0.0
+        };
         // Holdings reprice as the clock moves; nothing in the account changes,
-        // so it is only worth working out when the ledger will say so.
-        if collect_ledger {
+        // so it is only worth working out when the ledger (or a spending
+        // rule) will say so.
+        if collect_ledger || track {
             let previous_value = account.holdings_value(market, start, now);
             let new_value = account.holdings_value(market, start, next_checkpoint);
-            if (new_value - previous_value).abs() > 0.001 {
+            if let Some(tracker) = tracker.as_deref_mut().filter(|_| track) {
+                tracker.add_growth(growth_year, account_id, new_value - previous_value);
+            }
+            if collect_ledger && (new_value - previous_value).abs() > 0.001 {
                 ledger.push(LedgerEntry::new(
                     next_checkpoint,
                     StateEvent::AssetAppreciation {
@@ -753,6 +774,10 @@ fn compound_accounts(
                 }
             }
             AccountFlavor::Property(_) => {}
+        }
+        if let Some(tracker) = tracker.as_deref_mut().filter(|_| track) {
+            let cash_after = account.cash_balance().unwrap_or(0.0);
+            tracker.add_growth(growth_year, account_id, cash_after - cash_before);
         }
     }
 
@@ -855,6 +880,15 @@ fn advance_time(state: &mut SimulationState) {
     let previous = state.timeline.current_date;
     let next_checkpoint = find_next_checkpoint(state);
     let days_passed = crate::date_math::fast_days_between(previous, next_checkpoint);
+
+    // The year a checkpoint crosses into opens with the balances left after
+    // December 31st's events; the growth on the way there is its own.
+    if previous.year() != next_checkpoint.year() && state.spending.is_some() {
+        let balances = crate::spending::liquid_balances(state);
+        if let Some(tracker) = state.spending.as_mut() {
+            tracker.open_year(next_checkpoint.year(), balances);
+        }
+    }
 
     if days_passed > 0 {
         compound_accounts(state, next_checkpoint, days_passed);
@@ -1117,6 +1151,12 @@ pub struct BatchOutput {
     pub mean_accumulators: Option<MeanAccumulators>,
     pub real_accumulator: Option<RealAccumulator>,
     pub funding: crate::model::FundingAccumulator,
+    /// Each path's spending diagnostics, for a plan with a `Spending` effect.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spending: Option<crate::model::SpendingAccumulator>,
+    /// Real total spending by year, alongside `real_accumulator`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub real_spending: Option<RealSpendingAccumulator>,
 }
 
 /// Everything a worker needs to run batches, built once by `prepare_run`.
@@ -1130,6 +1170,8 @@ pub struct PreparedRun {
     /// An empty real-wealth accumulator on the plan's date grid; each batch
     /// starts from a copy. `None` when real quantiles are not wanted.
     real_template: Option<RealAccumulator>,
+    /// The same for real spending, on a plan with a `Spending` effect.
+    spending_template: Option<RealSpendingAccumulator>,
     compute_means: bool,
 }
 
@@ -1186,6 +1228,9 @@ pub fn prepare_run_with(
     Ok(PreparedRun {
         batch_params,
         real_template: collect_real.then(|| RealAccumulator::new(&template)),
+        spending_template: collect_real
+            .then(|| RealSpendingAccumulator::new(&template))
+            .flatten(),
         compute_means: config.compute_mean,
     })
 }
@@ -1238,6 +1283,8 @@ pub fn run_batch_observed(
     let mut local_acc: Option<MeanAccumulators> = None;
     let mut local_real = prepared.real_template.clone();
     let mut local_funding = crate::model::FundingAccumulator::default();
+    let mut local_spending = crate::model::SpendingAccumulator::default();
+    let mut local_real_spending = prepared.spending_template.clone();
     let mut local_results = Vec::with_capacity(spec.iterations);
     let mut local_after_tax = Vec::with_capacity(spec.iterations);
 
@@ -1258,6 +1305,12 @@ pub fn run_batch_observed(
         }
         if let Some(acc) = &mut local_real {
             acc.accumulate(seed, &result)?;
+        }
+        if let Some(acc) = &mut local_real_spending {
+            acc.accumulate(&result)?;
+        }
+        if let Some(spending) = &result.diagnostics.spending {
+            local_spending.add(spending);
         }
         // A skipped/failed effect is not evidence that the plan was funded.
         local_stats.add(fnw, result.warnings.is_empty());
@@ -1291,6 +1344,8 @@ pub fn run_batch_observed(
         mean_accumulators: local_acc,
         real_accumulator: local_real,
         funding: local_funding,
+        spending: (!local_spending.is_empty()).then_some(local_spending),
+        real_spending: local_real_spending,
     })
 }
 
@@ -1315,6 +1370,8 @@ pub struct MonteCarloCoordinator {
     mean_accumulators: Option<MeanAccumulators>,
     real_accumulator: Option<RealAccumulator>,
     funding: crate::model::FundingAccumulator,
+    spending: Option<crate::model::SpendingAccumulator>,
+    real_spending: Option<RealSpendingAccumulator>,
 
     batch_seed: u64,
     converged: bool,
@@ -1346,6 +1403,8 @@ impl MonteCarloCoordinator {
             mean_accumulators: None,
             real_accumulator: None,
             funding: crate::model::FundingAccumulator::default(),
+            spending: None,
+            real_spending: None,
             batch_seed: base_seed,
             converged: false,
             final_convergence_value: None,
@@ -1437,6 +1496,18 @@ impl MonteCarloCoordinator {
 
         for out in outputs {
             self.funding.merge(out.funding);
+            if let Some(local) = out.spending {
+                match &mut self.spending {
+                    Some(acc) => acc.merge(local),
+                    None => self.spending = Some(local),
+                }
+            }
+            if let Some(local) = out.real_spending {
+                match &mut self.real_spending {
+                    Some(acc) => acc.merge(local),
+                    None => self.real_spending = Some(local),
+                }
+            }
             if let Some(local) = out.real_accumulator {
                 match &mut self.real_accumulator {
                     Some(acc) => acc.merge(local),
@@ -1494,6 +1565,7 @@ impl MonteCarloCoordinator {
             real_net_worth: result.real_net_worth,
             funding: Some(result.funding),
             percentile_seeds: result.percentile_seeds,
+            real_spending: result.real_spending,
         })
     }
 
@@ -1576,6 +1648,9 @@ impl MonteCarloCoordinator {
             converged: self.convergence_metric.map(|_| self.converged),
             convergence_metric: self.convergence_metric,
             convergence_value: self.final_convergence_value,
+            spending: self
+                .spending
+                .and_then(crate::model::SpendingAccumulator::finish),
         };
 
         // Real quantiles belong to phase 2: a stats-only run drops them.
@@ -1587,6 +1662,10 @@ impl MonteCarloCoordinator {
             real_net_worth: real_accumulator.map(RealAccumulator::finish).transpose()?,
             percentile_seeds,
             funding: self.funding.finish(),
+            real_spending: self
+                .real_spending
+                .filter(|_| phase2_params.is_some())
+                .and_then(RealSpendingAccumulator::finish),
         })
     }
 }
@@ -1628,6 +1707,7 @@ struct MonteCarloInternalResult {
     real_net_worth: Option<crate::model::RealNetWorthSummary>,
     percentile_seeds: Vec<(f64, u64)>,
     funding: crate::model::FundingDiagnostics,
+    real_spending: Option<crate::model::RealSpendingSummary>,
 }
 
 /// Base seed for a run whose `MonteCarloConfig::seed` is `None`.
@@ -1733,6 +1813,7 @@ pub fn monte_carlo_simulate_with_config(
         real_net_worth: result.real_net_worth,
         funding: Some(result.funding),
         percentile_seeds: result.percentile_seeds,
+        real_spending: result.real_spending,
     })
 }
 
@@ -1774,6 +1855,7 @@ pub fn monte_carlo_simulate_with_progress(
         real_net_worth: result.real_net_worth,
         funding: Some(result.funding),
         percentile_seeds: result.percentile_seeds,
+        real_spending: result.real_spending,
     })
 }
 

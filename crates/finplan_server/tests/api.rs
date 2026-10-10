@@ -6098,3 +6098,6 @@ async fn a_draft_that_cannot_run_stays_a_draft() {
         .await;
     assert_eq!(status, StatusCode::CREATED, "{created}");
 }
+
+#[path = "cases/spending.rs"]
+mod spending_cases;

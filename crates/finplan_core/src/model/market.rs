@@ -563,6 +563,20 @@ pub enum InflationProfile {
 }
 
 impl InflationProfile {
+    /// The long-run yearly inflation rate this profile implies.
+    #[must_use]
+    pub fn expected_rate(&self) -> f64 {
+        match self {
+            InflationProfile::None => 0.0,
+            InflationProfile::Fixed(rate) => *rate,
+            InflationProfile::Normal { mean, .. } => *mean,
+            InflationProfile::LogNormal { mean, .. } => mean.exp() - 1.0,
+            InflationProfile::Bootstrap { history, .. } => history
+                .statistics()
+                .map_or(0.0, |stats| stats.geometric_mean),
+        }
+    }
+
     // US CPI Inflation (All Urban Consumers)
     // Source: FRED (CPIAUCSL)
     // Data: 1948-2025 (78 years)
@@ -697,6 +711,45 @@ pub enum ReturnProfile {
 }
 
 impl ReturnProfile {
+    /// The long-run compound (geometric) yearly return this profile implies:
+    /// a distribution's mean less half its variance, a log-normal's `e^μ − 1`,
+    /// a history's geometric mean, regimes weighted by their steady state.
+    #[must_use]
+    pub fn expected_geometric_return(&self) -> f64 {
+        match self {
+            ReturnProfile::None => 0.0,
+            ReturnProfile::Fixed(rate) => *rate,
+            ReturnProfile::Normal { mean, std_dev } => mean - std_dev * std_dev / 2.0,
+            ReturnProfile::LogNormal { mean, .. } => mean.exp() - 1.0,
+            ReturnProfile::StudentT { mean, scale, df } => {
+                let variance = if *df > 2.0 {
+                    scale * scale * df / (df - 2.0)
+                } else {
+                    scale * scale
+                };
+                mean - variance / 2.0
+            }
+            ReturnProfile::RegimeSwitching {
+                bull,
+                bear,
+                bull_to_bear_prob,
+                bear_to_bull_prob,
+            } => {
+                let total = bull_to_bear_prob + bear_to_bull_prob;
+                let bull_share = if total > 0.0 {
+                    bear_to_bull_prob / total
+                } else {
+                    0.5
+                };
+                bull_share * bull.expected_geometric_return()
+                    + (1.0 - bull_share) * bear.expected_geometric_return()
+            }
+            ReturnProfile::Bootstrap { history, .. } => history
+                .statistics()
+                .map_or(0.0, |stats| stats.geometric_mean),
+        }
+    }
+
     /// Sample a single return from this profile.
     ///
     /// For `RegimeSwitching`, this samples statelessly using steady-state regime probabilities.

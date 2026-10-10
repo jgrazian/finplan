@@ -31,8 +31,8 @@ use funding::{FundingDiagnostics, funding_view};
 use shape::{LEDGER_PAGE_MAX, check_category, factor_for, path_id, resolve_series, year_of};
 use view::{
     AccountSeries, Band, CashFlow, InflationPoint, LedgerEntry, LedgerPage, LedgerYear,
-    PercentileValue, RealNetWorthSummary, RealQuantilePoint, RealTerminalStats, Results, Stats,
-    Warning,
+    PercentileValue, RealNetWorthSummary, RealQuantilePoint, RealTerminalStats, Results,
+    SpendingResults, Stats, Warning,
 };
 
 /// What a run was asked to do, as far as shaping its results is concerned.
@@ -142,6 +142,9 @@ pub struct RunResults {
     pub after_tax_final: Option<f64>,
     pub real_net_worth: Option<RealNetWorthSummary>,
     pub funding_diagnostics: Option<FundingDiagnostics>,
+    /// The spending rule's outcomes; None without a `Spending` effect.
+    #[serde(default)]
+    pub spending: Option<SpendingResults>,
     /// The plan's accounts in display order (their sort order, then id).
     /// Per-account series are labelled and ordered by this.
     pub account_labels: Vec<AccountLabel>,
@@ -241,6 +244,8 @@ pub fn project(
         }
     });
 
+    let spending = spending_results(summary, &compiled.config);
+
     let account_labels = (0u16..)
         .map(AccountId)
         .map_while(|id| compiled.id_map.account_db_id(id))
@@ -293,8 +298,80 @@ pub fn project(
             .funding
             .as_ref()
             .map(|funding| funding_view(&compiled.id_map, funding)),
+        spending,
         account_labels,
         paths,
+    }
+}
+
+/// The run's spending block: the stats from every path's draws, the real
+/// spending fan when the run kept one, and which rules `config` spends by.
+/// None for a plan without a rule.
+pub fn spending_results(
+    summary: &MonteCarloSummary,
+    config: &finplan_core::config::SimulationConfig,
+) -> Option<SpendingResults> {
+    use finplan_core::model::{EventEffect, SpendingRule};
+    let stats = summary.stats.spending.as_ref()?;
+    let rules: Vec<&SpendingRule> = config
+        .events
+        .iter()
+        .flat_map(|event| &event.effects)
+        .filter_map(|effect| match effect {
+            EventEffect::Spending { rule, .. } => Some(rule),
+            _ => None,
+        })
+        .collect();
+    let points = summary
+        .real_spending
+        .as_ref()
+        .map(|real| {
+            real.points
+                .iter()
+                .map(|point| RealQuantilePoint {
+                    date: point.date.to_string(),
+                    p5: point.p5,
+                    p10: Some(point.p10),
+                    p25: Some(point.p25),
+                    p50: point.p50,
+                    p75: Some(point.p75),
+                    p90: Some(point.p90),
+                    p95: point.p95,
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    Some(SpendingResults {
+        num_iterations: summary.stats.num_iterations as i64,
+        median_lifetime_spending: stats.median_lifetime_spending,
+        p10_lowest_draw: stats.p10_lowest_draw,
+        cut_rate: stats.cut_rate,
+        median_years_below_first: stats.median_years_below_first,
+        median_first_draw: stats.median_first_draw,
+        rules: rules
+            .iter()
+            .map(|rule| rule_label(rule).to_string())
+            .collect(),
+        cut_cap: rules
+            .iter()
+            .map(|rule| match rule {
+                SpendingRule::CappedChange { max_cut, .. } => Some(*max_cut),
+                _ => None,
+            })
+            .collect::<Option<Vec<f64>>>()
+            .and_then(|caps| caps.into_iter().reduce(f64::max)),
+        points,
+    })
+}
+
+/// A spending rule's name as the screens show it.
+fn rule_label(rule: &finplan_core::model::SpendingRule) -> &'static str {
+    use finplan_core::model::SpendingRule;
+    match rule {
+        SpendingRule::PercentOfPortfolio { .. } => "Percent of portfolio",
+        SpendingRule::Guardrails { .. } => "Guardrails",
+        SpendingRule::CappedChange { .. } => "Capped change",
+        SpendingRule::Vpw { .. } => "VPW",
     }
 }
 
@@ -631,6 +708,7 @@ impl RunResults {
             inflation,
             ledger_years: shown.map(PathResults::ledger_years).unwrap_or_default(),
             funding_diagnostics: self.funding_diagnostics.clone(),
+            spending: self.spending.clone(),
         })
     }
 

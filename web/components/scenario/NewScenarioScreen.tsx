@@ -23,6 +23,15 @@ import { HOME_LABEL, HomeIcon } from "@/components/local/HomeIcon";
 import { type PlanHome, planApiFor, planCapabilities } from "@/lib/nav";
 import { addYears, money, yearsBetween } from "@/lib/view/format";
 import { takeHome, type TakeHome } from "@/lib/view/takeHome";
+import {
+  CHOICE_EXPLAINED,
+  SPENDING_CHOICES,
+  type SpendingChoice,
+  describeRule,
+  guardrails,
+  switchRule,
+} from "@/lib/view/spending";
+import type { SpendingRuleSpec } from "@/lib/api/types";
 import { DescribeSetup } from "./DescribeSetup";
 import { SetupBar } from "./SetupBar";
 import {
@@ -98,7 +107,22 @@ type SetupDraft = SetupPlan & {
   monthly_spending: number;
   /** Retirement spending as a percent of working-year spending. */
   retirement_spending_percent: number;
+  /** Fixed, or a rule that adjusts it with the market (spec 22). */
+  retirement_spending_choice: SpendingChoice;
 };
+
+/** What the setup suggests for retirement spending. */
+const SUGGESTED_CHOICE: SpendingChoice = "Guardrails";
+
+/**
+ * The rule a setup's retirement spending follows: the choice, starting at
+ * the yearly amount (a rate rule at the rate that amount is of the opening
+ * savings). None for Fixed or no spending.
+ */
+function setupRule(choice: SpendingChoice, yearly: number, savings: number): SpendingRuleSpec | null {
+  if (choice === "Fixed" || !(yearly > 0)) return null;
+  return switchRule(guardrails(Math.round(yearly)), choice, savings);
+}
 
 /** Where retirement spending starts: a common rule of thumb, not a forecast. */
 const DEFAULT_RETIREMENT_SPENDING_PERCENT = 90;
@@ -197,11 +221,17 @@ function setupPlanOf(draft: SetupDraft): SetupPlan {
   delete answers.contribute_401k;
   delete answers.monthly_spending;
   delete answers.retirement_spending_percent;
+  delete answers.retirement_spending_choice;
   plan.retirement_401k_contribution_percent = draft.contribute_401k
     ? draft.retirement_401k_contribution_percent
     : 0;
   plan.annual_spending = draft.monthly_spending * 12;
   plan.retirement_spending = (draft.monthly_spending * 12 * draft.retirement_spending_percent) / 100;
+  plan.retirement_spending_rule = setupRule(
+    draft.retirement_spending_choice,
+    plan.retirement_spending,
+    draft.cash + draft.retirement_401k + draft.investments,
+  ) ?? undefined;
   return plan;
 }
 
@@ -415,6 +445,7 @@ function GuidedSetup(
       retirement_spending: 0,
       monthly_spending: 0,
       retirement_spending_percent: DEFAULT_RETIREMENT_SPENDING_PERCENT,
+      retirement_spending_choice: SUGGESTED_CHOICE,
       inflation_profile_id: props.inflationProfiles[0]?.id ?? null,
       tax_config_id: defaultTaxConfig(props.taxConfigs)?.id ?? null,
       fund_from_investments: true,
@@ -728,18 +759,33 @@ function GuidedSetup(
       fresh: step === INCOME_STEP || (step === ASSUME_STEP && funding.length > 0),
     });
   }
+  const retirementRule = setupRule(
+    draft.retirement_spending_choice,
+    monthlyRetirementSpending * 12,
+    draft.cash + draft.retirement_401k + draft.investments,
+  );
   if (monthlyRetirementSpending > 0) {
     events.push({
       name: "Retirement spending",
-      parts: [
-        "every year from",
-        retireAt,
-        "· Expense of",
-        { expr: `inflation(${money(monthlyRetirementSpending * 12)})` },
-        "from",
-        { slot: "Checking" },
-        ...funding,
-      ],
+      parts: retirementRule
+        ? [
+          "every month from",
+          retireAt,
+          "· Spending by",
+          { expr: describeRule(retirementRule) },
+          "from",
+          { slot: "Checking" },
+          ...funding,
+        ]
+        : [
+          "every year from",
+          retireAt,
+          "· Expense of",
+          { expr: `inflation(${money(monthlyRetirementSpending * 12)})` },
+          "from",
+          { slot: "Checking" },
+          ...funding,
+        ],
       fresh: step === INCOME_STEP || (step === ASSUME_STEP && funding.length > 0),
     });
   }
@@ -1017,6 +1063,24 @@ function GuidedSetup(
                     at {DEFAULT_RETIREMENT_SPENDING_PERCENT}%. Salary stops at age{" "}
                     {draft.retirement_age}; retirement spending replaces working-year spending.
                   </p>
+                  <Field label="Fixed, or adjust with the market?">
+                    <Dropdown
+                      className="dd-field"
+                      ariaLabel="Retirement spending rule"
+                      options={SPENDING_CHOICES.map((choice) => ({
+                        value: choice.value,
+                        label: choice.value === SUGGESTED_CHOICE ? `${choice.label} (suggested)` : choice.label,
+                        detail: choice.detail,
+                      }))}
+                      value={draft.retirement_spending_choice}
+                      onChange={(retirement_spending_choice) => patch({ retirement_spending_choice })}
+                    />
+                  </Field>
+                  <p className="ns-mut">
+                    {CHOICE_EXPLAINED[draft.retirement_spending_choice]}
+                    {draft.retirement_spending_choice !== "Fixed" &&
+                      " Results then show how deep and how often spending is cut, beside whether cash ever runs short."}
+                  </p>
                   <TakeHomeLine year={firstYear} taxName={taxConfig?.name} />
                 </>
               )}
@@ -1183,7 +1247,13 @@ function GuidedSetup(
                     </p>
                   )}
                   <p>
-                    Annual gross salary ${draft.annual_income.toLocaleString()}; monthly spending ${draft.monthly_spending.toLocaleString()} before retirement and {money(monthlyRetirementSpending)} after ({draft.retirement_spending_percent}%).
+                    Annual gross salary ${draft.annual_income.toLocaleString()}; monthly spending ${draft.monthly_spending.toLocaleString()} before retirement and {money(monthlyRetirementSpending)} after ({draft.retirement_spending_percent}%){
+                      draft.retirement_spending_choice === "Fixed"
+                        ? ", fixed"
+                        : `, adjusting with the market (${
+                          SPENDING_CHOICES.find((c) => c.value === draft.retirement_spending_choice)?.label
+                        })`
+                    }.
                   </p>
                   <TakeHomeLine year={firstYear} taxName={taxConfig?.name} />
                   {annual401kContribution > 0 && (

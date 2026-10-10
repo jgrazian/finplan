@@ -380,6 +380,7 @@ impl LazySweepResults {
             p50_lifetime_taxes,
             final_inflation_factor,
             after_tax_final_percentiles: stats.after_tax_percentile_values.clone(),
+            spending: stats.spending.clone(),
         }
     }
 
@@ -628,6 +629,7 @@ pub fn sweep_simulate_lazy_with(
         converged: None,
         convergence_metric: None,
         convergence_value: None,
+        spending: None,
     };
     let mut stats_grid: SweepGrid<MonteCarloStats> =
         SweepGrid::new(shape.clone(), default_stats.clone());
@@ -805,6 +807,23 @@ fn apply_effect_param(
 ) -> Result<(), SimulationError> {
     use crate::model::EventEffect;
 
+    // A spending rule's term: the first Spending effect, or the one named.
+    if let EffectParam::SpendingRule(field) = param {
+        let idx = match target {
+            EffectTarget::FirstEligible => effects
+                .iter()
+                .position(|e| matches!(e, EventEffect::Spending { .. })),
+            EffectTarget::Index(idx) => Some(*idx),
+        };
+        let Some(EventEffect::Spending { rule, .. }) = idx.and_then(|i| effects.get_mut(i)) else {
+            return Err(SimulationError::Config(
+                "No spending rule found for sweep".to_string(),
+            ));
+        };
+        *rule = field.apply(rule, value).map_err(SimulationError::Config)?;
+        return Ok(());
+    }
+
     // Find the target effect
     let effect_idx = match target {
         EffectTarget::FirstEligible => effects.iter().position(has_sweepable_amount),
@@ -873,6 +892,11 @@ fn apply_amount_param(
     let replacement = match param {
         EffectParam::Value => amount.with_fixed_value(value),
         EffectParam::Multiplier => amount.with_scale_factor(value),
+        EffectParam::SpendingRule(_) => {
+            return Err(SimulationError::Config(
+                "a spending rule term is not an amount".to_string(),
+            ));
+        }
     }
     .map_err(|error| SimulationError::Config(error.to_string()))?;
     *amount = replacement;

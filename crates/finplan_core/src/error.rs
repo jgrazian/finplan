@@ -295,6 +295,9 @@ pub enum StateEventError {
     Lookup(LookupError),
     AccountType(AccountTypeError),
     TransferEvaluation(TransferEvaluationError),
+    /// An effect used where it cannot run, e.g. a `Spending` effect inside a
+    /// `Random` or outside a repeating event.
+    Unsupported(&'static str),
 }
 
 impl fmt::Display for StateEventError {
@@ -303,6 +306,7 @@ impl fmt::Display for StateEventError {
             StateEventError::Lookup(e) => write!(f, "{e}"),
             StateEventError::AccountType(e) => write!(f, "{e}"),
             StateEventError::TransferEvaluation(e) => write!(f, "{e}"),
+            StateEventError::Unsupported(message) => write!(f, "{message}"),
         }
     }
 }
@@ -313,6 +317,7 @@ impl std::error::Error for StateEventError {
             StateEventError::Lookup(e) => Some(e),
             StateEventError::AccountType(e) => Some(e),
             StateEventError::TransferEvaluation(e) => Some(e),
+            StateEventError::Unsupported(_) => None,
         }
     }
 }
@@ -324,6 +329,7 @@ impl StateEventError {
             StateEventError::Lookup(e) => e.account_id(),
             StateEventError::AccountType(e) => e.account_id(),
             StateEventError::TransferEvaluation(e) => e.account_id(),
+            StateEventError::Unsupported(_) => None,
         }
     }
 }

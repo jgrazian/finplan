@@ -6,6 +6,7 @@ import type { FundingDiagnostics } from "./FundingDiagnostics";
 import type { InflationPoint } from "./InflationPoint";
 import type { LedgerYear } from "./LedgerYear";
 import type { RealNetWorthSummary } from "./RealNetWorthSummary";
+import type { SpendingResults } from "./SpendingResults";
 import type { Stats } from "./Stats";
 import type { Warning } from "./Warning";
 
@@ -52,4 +53,9 @@ export type Results = {
    * superseded runs too. Null for runs stored before it was measured.
    */
   funding_diagnostics: FundingDiagnostics | null;
+  /**
+   * What the plan's spending rule spent, over every iteration (spec 22).
+   * Absent unless the plan has a `Spending` effect.
+   */
+  spending?: SpendingResults;
 };

@@ -30,6 +30,7 @@ pub mod run;
 pub mod setup;
 pub mod snapshot;
 pub mod specs;
+pub mod spending;
 pub mod suggest;
 pub mod templates;
 pub mod what_if;

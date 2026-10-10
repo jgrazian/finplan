@@ -79,12 +79,20 @@ pub async fn persist(db: &Db, run_id: i64, results: &RunResults) -> Result<(), s
         .transpose()
         .map_err(|e| sqlx::Error::Encode(Box::new(e)))?;
 
+    let spending_json = results
+        .spending
+        .as_ref()
+        .map(serde_json::to_string)
+        .transpose()
+        .map_err(|e| sqlx::Error::Encode(Box::new(e)))?;
+
     sqlx::query(
         "INSERT INTO run_stats (run_id, num_iterations, success_rate, mean_final_net_worth,
                                 std_dev_final_net_worth, min_final_net_worth, max_final_net_worth,
                                 lifetime_taxes, converged, convergence_metric, convergence_value,
-                                funding_success_rate, funding_diagnostics, after_tax_final)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+                                funding_success_rate, funding_diagnostics, after_tax_final,
+                                spending)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
     )
     .bind(run_id)
     .bind(stats.num_iterations)
@@ -100,6 +108,7 @@ pub async fn persist(db: &Db, run_id: i64, results: &RunResults) -> Result<(), s
     .bind(stats.funding_success_rate)
     .bind(funding_json)
     .bind(results.after_tax_final)
+    .bind(spending_json)
     .execute(&mut *tx)
     .await?;
 

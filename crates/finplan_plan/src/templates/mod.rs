@@ -251,6 +251,13 @@ pub struct RecurringExpenseParams {
     #[serde(default)]
     #[ts(optional)]
     pub sort_order: Option<i64>,
+    /// Adjust with the market (spec 22): a `Spending` effect under this rule,
+    /// which names its own amounts, in place of the fixed expense. It repeats
+    /// monthly unless `interval` says quarterly or yearly, and spends the
+    /// paying account's other income and expenses too.
+    #[serde(default)]
+    #[ts(optional)]
+    pub rule: Option<crate::specs::SpendingRuleSpec>,
 }
 
 /// A retirement marker event, and optionally the spending that begins with it.
@@ -279,6 +286,13 @@ pub struct RetirementSpending {
     pub annual_amount: f64,
     #[serde(default)]
     pub fund_from_investments: bool,
+    /// Adjust with the market (spec 22): a monthly `Spending` effect under
+    /// this rule, spending the paying account's other income and expenses
+    /// too, in place of the fixed expense. The rule names its own starting
+    /// point; `annual_amount` is the fixed spend it replaces.
+    #[serde(default)]
+    #[ts(optional)]
+    pub rule: Option<crate::specs::SpendingRuleSpec>,
 }
 
 /// Buying a home: the property, and a mortgage when the down payment does not
@@ -953,6 +967,9 @@ fn recurring_expense(
     p: &RecurringExpenseParams,
 ) -> Result<RowRef, TemplateError> {
     positive("amount", p.amount)?;
+    if let Some(rule) = &p.rule {
+        return rule_spending(out, local, p, rule);
+    }
     let interval = p.interval.unwrap_or(Interval::Yearly);
     if matches!(interval, Interval::Never) {
         return Err(TemplateError::new("a recurring expense repeats"));
@@ -1034,6 +1051,66 @@ fn recurring_expense(
     ))
 }
 
+/// [`recurring_expense`] under a spending rule: one `Spending` effect, then
+/// (when asked) a sweep refilling whatever the payment overdrew.
+fn rule_spending(
+    out: &mut Builder,
+    local: &str,
+    p: &RecurringExpenseParams,
+    rule: &crate::specs::SpendingRuleSpec,
+) -> Result<RowRef, TemplateError> {
+    rule.validate()
+        .map_err(|e| TemplateError::new(e.to_string()))?;
+    let interval = match p.interval {
+        None | Some(Interval::Monthly) => Interval::Monthly,
+        Some(Interval::Quarterly) => Interval::Quarterly,
+        Some(Interval::Yearly) => Interval::Yearly,
+        Some(_) => {
+            return Err(TemplateError::new(
+                "spending under a rule repeats monthly, quarterly or yearly",
+            ));
+        }
+    };
+    let mut effects = vec![json!({
+        "kind": "Spending",
+        "from_account_id": p.from_account_id.json(),
+        "rule": rule,
+        "portfolio": {"kind": "Liquid"},
+        "pass_through": true,
+    })];
+    if p.fund_from_investments {
+        effects.push(json!({
+            "kind": "Sweep",
+            "to_account_id": p.from_account_id.json(),
+            "amount": expression("top_up(0)".to_string()),
+            "sources": {
+                "mode": "Strategy",
+                "strategy": "TaxEfficientEarly",
+                "exclude_accounts": [],
+                "bracket_ceiling": null,
+            },
+            "amount_mode": "Net",
+            "lot_method": "Fifo",
+            "income_type": "TaxFree",
+        }));
+    }
+    let start = p.start.as_ref().map(When::trigger).transpose()?;
+    let end = p.end.as_ref().map(When::trigger).transpose()?;
+    Ok(out.create(
+        local,
+        RefKind::Event,
+        with_sort(
+            event_body(
+                named(&Some(p.name.clone()), "")?,
+                false,
+                repeating(interval, start, end),
+                effects,
+            ),
+            p.sort_order,
+        ),
+    ))
+}
+
 fn retirement(out: &mut Builder, p: &RetirementParams) -> Result<(), TemplateError> {
     let when = p.retirement.trigger()?;
     out.create(
@@ -1062,6 +1139,7 @@ fn retirement(out: &mut Builder, p: &RetirementParams) -> Result<(), TemplateErr
                 end: None,
                 fund_from_investments: s.fund_from_investments,
                 sort_order: None,
+                rule: s.rule.clone(),
             },
         )?;
     }

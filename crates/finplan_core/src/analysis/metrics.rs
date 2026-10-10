@@ -23,6 +23,12 @@ pub enum AnalysisMetric {
     /// Median final net worth less the income tax its tax-deferred balances
     /// still owe (`SimulationResult::deferred_exit_tax`)
     AfterTaxEndingBalance,
+    /// Median over paths of a spending rule's lifetime draws, real (spec 22).
+    MedianLifetimeSpending,
+    /// 10th percentile over paths of the lowest yearly draw, real.
+    LowestDrawP10,
+    /// Share of paths with a cut in the real draw deeper than 10%.
+    CutRate,
 }
 
 impl AnalysisMetric {
@@ -39,6 +45,9 @@ impl AnalysisMetric {
                 target_success_rate,
             } => format!("SWR @ {:.0}%", target_success_rate * 100.0),
             Self::AfterTaxEndingBalance => "After-Tax Ending Balance".to_string(),
+            Self::MedianLifetimeSpending => "Median Lifetime Spending".to_string(),
+            Self::LowestDrawP10 => "P10 Lowest Draw".to_string(),
+            Self::CutRate => "Cuts Deeper Than 10%".to_string(),
         }
     }
 
@@ -53,6 +62,9 @@ impl AnalysisMetric {
             Self::MaxDrawdown => "Drawdown",
             Self::SafeWithdrawalRate { .. } => "SWR",
             Self::AfterTaxEndingBalance => "After-tax",
+            Self::MedianLifetimeSpending => "Lifetime spend",
+            Self::LowestDrawP10 => "P10 draw",
+            Self::CutRate => "Cut %",
         }
     }
 }
@@ -96,6 +108,9 @@ pub struct SweepPointData {
     /// NOMINAL dollars. Empty in data stored before it was measured.
     #[serde(default)]
     pub after_tax_final_percentiles: Vec<(f64, f64)>,
+    /// A spending rule's outcomes (real), for a plan with one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spending: Option<crate::model::SpendingStats>,
 }
 
 /// Default inflation factor for backwards compatibility with old serialized data
@@ -113,6 +128,7 @@ impl Default for SweepPointData {
             p50_lifetime_taxes: 0.0,
             final_inflation_factor: 1.0,
             after_tax_final_percentiles: Vec::new(),
+            spending: None,
         }
     }
 }
@@ -167,6 +183,7 @@ impl SweepPointData {
             p50_lifetime_taxes,
             final_inflation_factor,
             after_tax_final_percentiles: summary.stats.after_tax_percentile_values.clone(),
+            spending: summary.stats.spending.clone(),
         }
     }
 
@@ -249,6 +266,16 @@ impl SweepPointData {
             }
 
             AnalysisMetric::AfterTaxEndingBalance => to_real(self.after_tax_median()),
+
+            // Already real; zero for a plan without a spending rule.
+            AnalysisMetric::MedianLifetimeSpending => self
+                .spending
+                .as_ref()
+                .map_or(0.0, |s| s.median_lifetime_spending),
+            AnalysisMetric::LowestDrawP10 => {
+                self.spending.as_ref().map_or(0.0, |s| s.p10_lowest_draw)
+            }
+            AnalysisMetric::CutRate => self.spending.as_ref().map_or(0.0, |s| s.cut_rate),
         }
     }
 
@@ -308,6 +335,11 @@ impl SweepPointData {
                 }
                 AnalysisMetric::AfterTaxEndingBalance => {
                     result.after_tax_ending_balance = Some(self.compute_metric(metric, birth_year));
+                }
+                AnalysisMetric::MedianLifetimeSpending
+                | AnalysisMetric::LowestDrawP10
+                | AnalysisMetric::CutRate => {
+                    // Read straight off `spending`; no legacy slot.
                 }
             }
         }
@@ -387,6 +419,11 @@ pub fn compute_metrics(
             }
             AnalysisMetric::AfterTaxEndingBalance => {
                 result.after_tax_ending_balance = summary.stats.after_tax_percentile(0.5);
+            }
+            AnalysisMetric::MedianLifetimeSpending
+            | AnalysisMetric::LowestDrawP10
+            | AnalysisMetric::CutRate => {
+                // On `summary.stats.spending`; no legacy slot.
             }
         }
     }

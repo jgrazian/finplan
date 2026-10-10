@@ -300,6 +300,7 @@ struct StatsRow {
     convergence_metric: Option<String>,
     convergence_value: Option<f64>,
     funding_diagnostics: Option<String>,
+    spending: Option<String>,
 }
 
 #[derive(Debug, Deserialize, TS)]
@@ -329,7 +330,8 @@ pub(crate) async fn results(
     let stats_row: StatsRow = sqlx::query_as(
         "SELECT num_iterations, success_rate, funding_success_rate, mean_final_net_worth, std_dev_final_net_worth,
                 min_final_net_worth, max_final_net_worth, lifetime_taxes,
-                converged, convergence_metric, convergence_value, funding_diagnostics
+                converged, convergence_metric, convergence_value, funding_diagnostics,
+                spending
            FROM run_stats WHERE run_id = ?1",
     )
     .bind(id)
@@ -353,6 +355,14 @@ pub(crate) async fn results(
                     run_id = id,
                     %error
                 );
+            })
+            .ok()
+    });
+
+    let spending = stats_row.spending.as_deref().and_then(|json| {
+        serde_json::from_str::<finplan_plan::results::view::SpendingResults>(json)
+            .inspect_err(|error| {
+                tracing::warn!(event = "run.spending_unreadable", run_id = id, %error);
             })
             .ok()
     });
@@ -572,6 +582,7 @@ pub(crate) async fn results(
         inflation,
         ledger_years: ledger_years(&state, id, series_percentile).await?,
         funding_diagnostics,
+        spending,
     }))
 }
 

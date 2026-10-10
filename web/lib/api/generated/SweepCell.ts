@@ -26,4 +26,12 @@ export type SweepCell = {
    * tax-deferred balances still owe. Absent where the run predates it.
    */
   after_tax_p50?: number | null;
+  /**
+   * A spending rule's outcomes in today's dollars (spec 22): the median
+   * lifetime draws, the 10th-percentile lowest yearly draw, and the share
+   * of markets with a cut deeper than 10%. Absent without a rule.
+   */
+  lifetime_spending?: number;
+  p10_lowest_draw?: number;
+  cut_rate?: number;
 };

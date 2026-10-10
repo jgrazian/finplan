@@ -18,6 +18,7 @@ import type {
 import type { EffectKind, EventEffect, PlanEvent } from "@/lib/types";
 import type { PlanAxis } from "./axis";
 import { addCalendarMonths, addYears, money, ratePercent } from "./format";
+import { describeRule } from "./spending.ts";
 
 export interface EventNames {
   account: (id: number) => string;
@@ -554,6 +555,15 @@ export function describeEffect(effect: EffectSpec, names: EventNames): EventEffe
             ? `from ${names.account(effect.pay_tax_from_account_id)}`
             : "withheld"
         }`,
+      };
+    case "Spending":
+      return {
+        kind,
+        detail: `from ${names.account(effect.from_account_id)} · ${describeRule(effect.rule)}${
+          effect.portfolio.kind === "Accounts"
+            ? ` · of ${effect.portfolio.account_ids.map(names.account).join(", ")}`
+            : ""
+        }${effect.pass_through ? "" : " · draw only"}`,
       };
   }
 }

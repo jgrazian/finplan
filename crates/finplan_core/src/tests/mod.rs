@@ -35,4 +35,5 @@ mod rsu;
 mod simulation_result;
 mod snapshots;
 mod solve;
+mod spending;
 mod withdrawal_strategy;

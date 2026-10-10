@@ -599,6 +599,19 @@ pub enum EffectData {
         pay_tax_from: Option<AccountTag>,
     },
 
+    /// Retirement spending decided by a rule once a year (spec 22). Read-only
+    /// here: rules are edited on the web.
+    Spending {
+        from: AccountTag,
+        rule: finplan_core::model::SpendingRule,
+        /// The accounts the rule reads; empty is every bank and investment
+        /// account.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        portfolio: Vec<AccountTag>,
+        #[serde(default = "spending_pass_through")]
+        pass_through: bool,
+    },
+
     /// Randomly execute effects based on probability
     /// Triggers on_true event if random roll < probability, otherwise on_false
     Random {
@@ -648,6 +661,44 @@ pub struct EventData {
     /// Whether this event is enabled in simulation (default true)
     #[serde(default = "default_true")]
     pub enabled: bool,
+}
+
+fn spending_pass_through() -> bool {
+    true
+}
+
+/// A spending rule in a few words, for the event list and the inspector.
+pub fn describe_spending_rule(rule: &finplan_core::model::SpendingRule) -> String {
+    use finplan_core::model::{SpendingInitial, SpendingRule};
+    let pct = |r: f64| format!("{:.1}%", r * 100.0);
+    match rule {
+        SpendingRule::Guardrails {
+            initial,
+            band,
+            step,
+            ..
+        } => format!(
+            "guardrails from {}, ±{} band, {} steps",
+            match initial {
+                SpendingInitial::Amount(a) => format!("${a:.0}/yr"),
+                SpendingInitial::Rate(r) => format!("{} of portfolio", pct(*r)),
+            },
+            pct(*band),
+            pct(*step)
+        ),
+        SpendingRule::PercentOfPortfolio { rate, .. } => format!("{} of portfolio", pct(*rate)),
+        SpendingRule::CappedChange {
+            rate,
+            max_cut,
+            max_raise,
+        } => format!(
+            "toward {} of portfolio, -{}/+{} a year",
+            pct(*rate),
+            pct(*max_cut),
+            pct(*max_raise)
+        ),
+        SpendingRule::Vpw { final_age, .. } => format!("VPW to age {final_age}"),
+    }
 }
 
 #[cfg(test)]

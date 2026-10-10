@@ -12,24 +12,27 @@ import { useNav } from "@/lib/nav";
 import { SweepPanel } from "./SweepPanel";
 import { WhatIfPanel } from "./WhatIfPanel";
 import { DrawdownPanel } from "./DrawdownPanel";
+import { SpendingRulesPanel } from "./SpendingRulesPanel";
 
-type Mode = "what-if" | "sweep" | "drawdown";
+type Mode = "what-if" | "sweep" | "drawdown" | "spending";
 
 /** Offer only implemented analysis workflows. */
 const MODES: ReadonlyArray<SegmentOption<Mode>> = [
   { value: "what-if", label: "What-if" },
   { value: "sweep", label: "Sweep" },
   { value: "drawdown", label: "Drawdown" },
+  { value: "spending", label: "Spending rules" },
 ];
 
 const CAPTIONS: Record<Mode, string> = {
   "what-if": "Stack overrides on a copy of the plan and see what each one costs or buys.",
   sweep: "Compare simulated outcomes across a range of plan inputs.",
   drawdown: "Plan which accounts fund each year of retirement spending.",
+  spending: "Compare how much each spending rule spends, and how deep its cuts go, over the same markets.",
 };
 
 function modeOf(section: string | undefined): Mode {
-  return section === "sweep" || section === "drawdown" ? section : "what-if";
+  return section === "sweep" || section === "drawdown" || section === "spending" ? section : "what-if";
 }
 
 /** Analysis tab: the what-if stack, the sweep grid, and the drawdown of a run. */
@@ -72,6 +75,9 @@ export function AnalysisScreen({
   } else if (mode === "drawdown") {
     // Drawdown reads a finished run, not named parameters, so it stands alone.
     body = <DrawdownPanel key={scenarioId} scenario={scenario} onPlanChanged={onPlanChanged} />;
+  } else if (mode === "spending") {
+    // Like Drawdown, it reads a finished run.
+    body = <SpendingRulesPanel key={scenarioId} scenario={scenario} onPlanChanged={onPlanChanged} />;
   } else if (mode === "what-if") {
     // What-if stands without named parameters — market shocks and one-off
     // events need none — so only the parameter rows of its menu go missing.
@@ -82,7 +88,9 @@ export function AnalysisScreen({
       <WhatIfPanel
         key={scenarioId}
         scenario={scenario}
-        parameters={parameters ?? []}
+        // A what-if overrides named parameters only; a spending rule's terms
+        // are swept, not overridden.
+        parameters={(parameters ?? []).filter((p) => p.id.startsWith("parameter:"))}
         onPlanChanged={planChanged}
         onScenarioCreated={onScenarioCreated}
       />
@@ -95,7 +103,7 @@ export function AnalysisScreen({
     body = (
       <EmptyState
         title="Nothing to analyse yet"
-        detail="Add named parameters on the Plan tab and reference them in amounts or schedules. Sweep varies these shared inputs across runs."
+        detail="Add named parameters on the Plan tab and reference them in amounts or schedules, or give retirement spending a rule. Sweep varies these inputs across runs."
       />
     );
   } else {

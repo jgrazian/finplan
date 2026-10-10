@@ -69,7 +69,7 @@ impl SolveObjective {
 }
 
 /// The outcome measure a constraint is written against.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum SolveConstraintMetric {
     /// Fraction of runs ending with positive net worth.
     SuccessRate,
@@ -77,6 +77,26 @@ pub enum SolveConstraintMetric {
     /// on results produced before the check existed — such a point is read as
     /// infeasible rather than silently passing.
     FundingSuccessRate,
+    /// A spending rule's 10th-percentile lowest yearly draw (spec 22) is at
+    /// least `min_real`, in plan-start dollars. Constraints are otherwise
+    /// fractions, so this one carries its own floor and ignores `min_value`.
+    /// A plan without a rule cannot meet it.
+    LowestDrawP10 { min_real: f64 },
+}
+
+impl SolveConstraintMetric {
+    /// Whether `stats` clear `min_value` on this measure.
+    #[must_use]
+    pub fn met(self, stats: &MonteCarloStats, min_value: f64) -> bool {
+        match self {
+            Self::SuccessRate => stats.success_rate >= min_value,
+            Self::FundingSuccessRate => stats.funding_success_rate.is_some_and(|v| v >= min_value),
+            Self::LowestDrawP10 { min_real } => stats
+                .spending
+                .as_ref()
+                .is_some_and(|s| s.p10_lowest_draw >= min_real),
+        }
+    }
 }
 
 /// The bar a candidate has to clear to count as an answer.
@@ -124,6 +144,9 @@ pub struct SolveProbe {
     /// The bracket this probe halved, for a bisection. `None` under grid
     /// search, which has no bracket to draw.
     pub bracket: Option<(f64, f64)>,
+    /// A spending rule's outcomes at this probe, for a plan with one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spending: Option<crate::model::SpendingStats>,
 }
 
 impl SolveProbe {
@@ -182,6 +205,8 @@ impl SolveResults {
         let p = match self.constraint_metric {
             SolveConstraintMetric::SuccessRate => best.success_rate,
             SolveConstraintMetric::FundingSuccessRate => best.funding_success_rate?,
+            // Not a proportion.
+            SolveConstraintMetric::LowestDrawP10 { .. } => return None,
         };
         if self.mc_iterations == 0 {
             return None;
@@ -198,6 +223,10 @@ pub struct SolveConfig {
     pub parameters: Vec<SweepParameter>,
     pub objective: SolveObjective,
     pub constraint: SolveConstraint,
+    /// Further constraints every answer must also clear, e.g. a floor on the
+    /// spending rule's lowest draw beside a funding success rate.
+    #[serde(default)]
+    pub also: Vec<SolveConstraint>,
     /// Monte Carlo iterations behind every probe.
     pub mc_iterations: usize,
     pub parallel_batches: usize,
@@ -218,6 +247,7 @@ impl Default for SolveConfig {
             parameters: Vec::new(),
             objective: SolveObjective::MaxParameter,
             constraint: SolveConstraint::default(),
+            also: Vec::new(),
             mc_iterations: 250,
             parallel_batches: default_parallel_batches(),
             seed: Some(0),
@@ -292,10 +322,23 @@ pub fn solve_with(
             "At least one parameter to vary is required".to_string(),
         ));
     }
-    if !(0.0..=1.0).contains(&config.constraint.min_value) {
-        return Err(SimulationError::Config(
-            "Constraint threshold must be a fraction between 0 and 1".to_string(),
-        ));
+    for constraint in std::iter::once(&config.constraint).chain(&config.also) {
+        let fraction = !matches!(
+            constraint.metric,
+            SolveConstraintMetric::LowestDrawP10 { .. }
+        );
+        if fraction && !(0.0..=1.0).contains(&constraint.min_value) {
+            return Err(SimulationError::Config(
+                "Constraint threshold must be a fraction between 0 and 1".to_string(),
+            ));
+        }
+        if let SolveConstraintMetric::LowestDrawP10 { min_real } = constraint.metric
+            && !(min_real.is_finite() && min_real >= 0.0)
+        {
+            return Err(SimulationError::Config(
+                "A lowest-draw floor must be an amount of zero or more".to_string(),
+            ));
+        }
     }
     for param in &config.parameters {
         if param.max_value <= param.min_value {
@@ -369,13 +412,12 @@ fn probe_from(
     values: Vec<f64>,
     bracket: Option<(f64, f64)>,
 ) -> SolveProbe {
-    let observed = match config.constraint.metric {
-        SolveConstraintMetric::SuccessRate => Some(stats.success_rate),
-        // A result recorded before funding was tracked cannot be shown to meet
-        // a funding constraint, so it does not.
-        SolveConstraintMetric::FundingSuccessRate => stats.funding_success_rate,
-    };
-    let feasible = observed.is_some_and(|v| v >= config.constraint.min_value);
+    // A result recorded before funding was tracked cannot be shown to meet a
+    // funding constraint, so it does not; a plan without a spending rule
+    // cannot meet a floor on its draws.
+    let feasible = std::iter::once(&config.constraint)
+        .chain(&config.also)
+        .all(|c| c.metric.met(stats, c.min_value));
 
     let percentile = |p: f64| {
         stats
@@ -402,6 +444,7 @@ fn probe_from(
         feasible,
         objective_value,
         bracket,
+        spending: stats.spending.clone(),
     }
 }
 
@@ -413,11 +456,33 @@ fn better(objective: SolveObjective, a: f64, b: f64) -> bool {
     }
 }
 
+/// Whether `probe` clears the main constraint alone: what a bisection steers
+/// by.
+fn clears_main(config: &SolveConfig, probe: &SolveProbe) -> bool {
+    let min = config.constraint.min_value;
+    match config.constraint.metric {
+        SolveConstraintMetric::SuccessRate => probe.success_rate >= min,
+        SolveConstraintMetric::FundingSuccessRate => {
+            probe.funding_success_rate.is_some_and(|v| v >= min)
+        }
+        SolveConstraintMetric::LowestDrawP10 { min_real } => probe
+            .spending
+            .as_ref()
+            .is_some_and(|s| s.p10_lowest_draw >= min_real),
+    }
+}
+
 /// Halve the bracket between the end of the range the objective wants and the
 /// nearest point that still clears the constraint.
 ///
 /// This method assumes a monotone constraint with a single crossing. Arbitrary
 /// event rules can violate that assumption; use a grid to inspect such plans.
+///
+/// The search steers by the main constraint; the `also` constraints are what
+/// an answer must clear too. A floor on a spending rule's lowest draw rises
+/// with the starting draw, so for the largest draw it is checked exactly
+/// where the main constraint stops: when it fails there, it fails below too,
+/// and there is no answer.
 fn bisect(
     base_config: &SimulationConfig,
     config: &SolveConfig,
@@ -448,8 +513,8 @@ fn bisect(
      -> Result<bool, SimulationError> {
         let mut probe = evaluate(base_config, config, &[value], runner)?;
         probe.bracket = bracket;
-        let feasible = probe.feasible;
-        if feasible
+        let steer = clears_main(config, &probe);
+        if probe.feasible
             && best
                 .as_ref()
                 .is_none_or(|b| better(config.objective, probe.objective_value, b.objective_value))
@@ -457,7 +522,7 @@ fn bisect(
             *best = Some(probe.clone());
         }
         probes.push(probe);
-        Ok(feasible)
+        Ok(steer)
     };
 
     // The end the objective wants: if the constraint holds there, the range
@@ -558,6 +623,7 @@ fn finish(
             feasible: false,
             objective_value: 0.0,
             bracket: None,
+            spending: None,
         },
         probes,
         best,

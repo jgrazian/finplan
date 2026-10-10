@@ -6,6 +6,7 @@ import {
   DEFAULT_ELEVATION,
   MAX_ELEVATION,
   METRICS,
+  metricsFor,
   MIN_ELEVATION,
   COLOR_SCALES,
   DEFAULT_SCALE,
@@ -431,8 +432,18 @@ test("the CSV carries one row per combination, in the order the server sent them
 test("the metric menu offers every measure a cell carries", () => {
   assert.deepEqual(
     METRICS.map((m) => m.id),
+    ["funding", "success", "p50", "p5", "p95", "after_tax", "lifetime_spending", "lowest_draw", "cut_rate"],
+  );
+  // The spending metrics are offered only where the sweep measured them.
+  const plain = { success_rate: 1, funding_success_rate: 0.9, p5: 0, p50: 5, p95: 9 };
+  assert.deepEqual(
+    metricsFor({ plan: plain }).map((m) => m.id),
     ["funding", "success", "p50", "p5", "p95", "after_tax"],
   );
+  const ruled = { ...plain, lifetime_spending: 2e6, p10_lowest_draw: 4e4, cut_rate: 0.3 };
+  assert.equal(metricsFor({ plan: ruled }).length, 9);
+  assert.equal(metric("cut_rate").of(ruled), 0.3);
+  assert.equal(metric("lowest_draw").of(ruled), 4e4);
   // A cell from before the after-tax median was measured has none to draw.
   const point = { success_rate: 1, funding_success_rate: null, p5: 0, p50: 5, p95: 9 };
   assert.equal(metric("after_tax").of(point), undefined);

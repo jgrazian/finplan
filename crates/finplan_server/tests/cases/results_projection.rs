@@ -625,3 +625,52 @@ async fn the_funding_policy_is_set_read_back_and_cleared() {
     assert_eq!(status, StatusCode::OK, "{off}");
     assert!(off["funding"].is_null());
 }
+
+/// A plan with a spending rule (spec 22): the served `spending` block, stored
+/// on `run_stats`, equals the projection's, and a plan without one has none.
+#[tokio::test]
+async fn a_spending_rule_projects_to_the_served_results() {
+    let mut app = TestApp::new().await;
+    app.login_as("golden-spending@example.com").await;
+    let (scenario_id, checking, _) = app.seed_scenario().await;
+    let (status, body) = app
+        .put(
+            &format!("/api/scenarios/{scenario_id}/funding"),
+            json!({"funding": {"strategy": "TaxEfficientEarly", "exclude_accounts": []}}),
+        )
+        .await;
+    assert!(status.is_success(), "{body}");
+
+    let without = run_and_project(
+        &app,
+        scenario_id,
+        json!({"iterations": 40, "seed": 3, "percentiles": [0.5]}),
+    )
+    .await;
+    let served = without.check_results(&app, None).await;
+    assert!(served.get("spending").is_none(), "{}", served["spending"]);
+
+    let (status, event) = app
+        .post(
+            &format!("/api/scenarios/{scenario_id}/events"),
+            json!({"name": "Spending",
+                   "trigger": {"kind": "Repeating", "interval": "Monthly"},
+                   "effects": [{"kind": "Spending", "from_account_id": checking,
+                                "rule": {"rule": "Guardrails",
+                                         "initial": {"kind": "Amount", "amount": 3000.0}}}]}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{event}");
+    let golden = run_and_project(
+        &app,
+        scenario_id,
+        json!({"iterations": 40, "seed": 3, "percentiles": [0.1, 0.5, 0.9]}),
+    )
+    .await;
+    golden.check_everything(&app).await;
+    let served = golden.check_results(&app, None).await;
+    let spending = &served["spending"];
+    assert_eq!(spending["num_iterations"], 40, "{spending}");
+    assert_eq!(spending["points"].as_array().unwrap().len(), 10);
+    assert!(spending["median_first_draw"].as_f64().unwrap() > 2999.0);
+}

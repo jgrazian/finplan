@@ -456,6 +456,121 @@ mod tests {
         .unwrap();
     }
 
+    /// Migration 0031 rebuilds `effects` and the withdrawal items again:
+    /// every effect, source, item and branch survives, a `Spending` effect
+    /// with a portfolio item is accepted, and one inside a Random is not.
+    #[tokio::test]
+    async fn the_spending_migration_keeps_every_effect_and_admits_spending() {
+        let options = SqliteConnectOptions::from_str("sqlite::memory:")
+            .unwrap()
+            .foreign_keys(true);
+        let mut conn = SqliteConnection::connect_with(&options).await.unwrap();
+        let before = sqlx::migrate::Migrator {
+            migrations: std::borrow::Cow::Owned(
+                MIGRATOR
+                    .iter()
+                    .filter(|m| m.version < 31)
+                    .cloned()
+                    .collect(),
+            ),
+            ignore_missing: false,
+            locking: true,
+            no_tx: false,
+        };
+        before.run(&mut conn).await.unwrap();
+        for statement in [
+            "INSERT INTO users(id,email,password_hash) VALUES('u','u@example.com','hash')",
+            "INSERT INTO scenarios(id,user_id,name,start_date) VALUES(1,'u','Plan','2026-01-01')",
+            "INSERT INTO accounts(id,scenario_id,name,flavor) VALUES(1,1,'IRA','Investment'),
+                 (2,1,'Checking','Bank'),(3,1,'Roth','Investment')",
+            "INSERT INTO events(id,scenario_id,name) VALUES(1,1,'Draw'),(2,1,'Maybe'),(3,1,'Convert')",
+            "INSERT INTO transfer_amounts(id,scenario_id,kind,value) VALUES(1,1,'Fixed',100),
+                 (2,1,'Fixed',5),(3,1,'Fixed',7)",
+            "INSERT INTO effects(id,scenario_id,event_id,position,kind,to_account_id,amount_id,
+                 income_type) VALUES(1,1,1,0,'Sweep',2,1,'Taxable')",
+            "INSERT INTO effect_withdrawal_sources(effect_id,mode,account_id)
+                 VALUES(1,'SingleAccount',1)",
+            "INSERT INTO effect_withdrawal_source_items(effect_id,role,position,account_id)
+                 VALUES(1,'exclude',0,2)",
+            "INSERT INTO effects(id,scenario_id,event_id,position,kind,probability)
+                 VALUES(2,1,2,0,'Random',0.5)",
+            "INSERT INTO effects(id,scenario_id,parent_id,parent_slot,kind,from_account_id,
+                 amount_id) VALUES(3,1,2,'on_true','Expense',2,2)",
+            "INSERT INTO effects(id,scenario_id,event_id,position,kind,from_account_id,
+                 to_account_id,amount_id,pay_tax_from_account_id)
+                 VALUES(4,1,3,0,'RothConversion',1,3,3,2)",
+        ] {
+            sqlx::query(statement).execute(&mut conn).await.unwrap();
+        }
+
+        MIGRATOR.run(&mut conn).await.unwrap();
+
+        let count = |sql: &'static str| sqlx::query_scalar::<_, i64>(sql);
+        for (sql, expected) in [
+            ("SELECT COUNT(*) FROM effects", 4),
+            ("SELECT COUNT(*) FROM effect_withdrawal_sources", 1),
+            ("SELECT COUNT(*) FROM effect_withdrawal_source_items", 1),
+            (
+                "SELECT COUNT(*) FROM effects WHERE pay_tax_from_account_id = 2",
+                1,
+            ),
+        ] {
+            assert_eq!(
+                count(sql).fetch_one(&mut conn).await.unwrap(),
+                expected,
+                "{sql}"
+            );
+        }
+        let violations: Vec<(String,)> =
+            sqlx::query_as("SELECT \"table\" FROM pragma_foreign_key_check")
+                .fetch_all(&mut conn)
+                .await
+                .unwrap();
+        assert!(violations.is_empty(), "{violations:?}");
+        // The branch still cascades with its Random.
+        sqlx::query("DELETE FROM effects WHERE id = 2")
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        assert_eq!(
+            count("SELECT COUNT(*) FROM effects")
+                .fetch_one(&mut conn)
+                .await
+                .unwrap(),
+            2
+        );
+
+        sqlx::query(
+            "INSERT INTO effects(id,scenario_id,event_id,position,kind,from_account_id,
+                 spending_rule,pass_through)
+                 VALUES(5,1,1,1,'Spending',2,'{\"rule\":\"Vpw\"}',1)",
+        )
+        .execute(&mut conn)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO effect_withdrawal_source_items(effect_id,role,position,account_id)
+                 VALUES(5,'portfolio',0,1)",
+        )
+        .execute(&mut conn)
+        .await
+        .unwrap();
+        // A branch, a missing rule, or a rule on another kind: refused.
+        for statement in [
+            "INSERT INTO effects(scenario_id,parent_id,parent_slot,kind,from_account_id,
+                 spending_rule,pass_through) VALUES(1,1,'on_true','Spending',2,'{}',1)",
+            "INSERT INTO effects(scenario_id,event_id,kind,from_account_id,pass_through)
+                 VALUES(1,1,'Spending',2,1)",
+            "INSERT INTO effects(scenario_id,event_id,kind,from_account_id,amount_id,
+                 spending_rule) VALUES(1,1,'Expense',2,1,'{}')",
+        ] {
+            assert!(
+                sqlx::query(statement).execute(&mut conn).await.is_err(),
+                "{statement}"
+            );
+        }
+    }
+
     #[tokio::test]
     async fn rebuild_preserves_data_resets_history_and_prunes_old_details() {
         let directory = tempfile::tempdir().unwrap();

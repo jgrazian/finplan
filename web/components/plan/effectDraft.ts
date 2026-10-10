@@ -26,9 +26,12 @@ import type {
   AmountSpec,
   EffectSpec,
   LotMethod,
+  SpendingPortfolioSpec,
+  SpendingRuleSpec,
   WithdrawalSourcesSpec,
   WithdrawalStrategy,
 } from "@/lib/api/types";
+import { guardrails, ruleProblem } from "../../lib/view/spending.ts";
 import { amountSource, readStaticAmount, rootAmountMode, staticAmount, type AmountNames } from "./amountDraft.ts";
 
 export const EFFECT_FORMS = [
@@ -46,6 +49,7 @@ export const EFFECT_FORMS = [
   "SellProperty",
   "MarketShock",
   "RothConversion",
+  "Spending",
   "Event control",
 ] as const;
 export type EffectForm = (typeof EFFECT_FORMS)[number];
@@ -76,6 +80,7 @@ export const FAMILY: Record<EffectForm, { label: string; tone: TagTone }> = {
   Sweep: { label: "multi-account", tone: "accent" },
   ApplyRmd: { label: "multi-account", tone: "accent" },
   RothConversion: { label: "multi-account", tone: "accent" },
+  Spending: { label: "cash flow", tone: "accent" },
   AdjustBalance: { label: "adjustment", tone: "neutral" },
   DeleteAccount: { label: "accounts", tone: "outline" },
   BuyProperty: { label: "real estate", tone: "outline" },
@@ -166,6 +171,15 @@ export interface EffectDraft {
   drop: number;
   /** `RothConversion`: the bank or taxable account paying the tax; 0 withholds it. */
   payTaxFromAccountId: number;
+  /**
+   * `Spending`: the rule. Unset until the effect is one; `spendingRuleOf`
+   * then starts Guardrails at the amount the draft carried.
+   */
+  spendingRule?: SpendingRuleSpec;
+  /** `Spending`: the accounts the rule reads; empty is every liquid account. */
+  portfolioIds: number[];
+  /** `Spending`: spend the paying account's other income and expenses too. */
+  passThrough: boolean;
   /** An effect the form cannot express (`Random`) — held verbatim. */
   raw?: EffectSpec;
 }
@@ -201,7 +215,22 @@ export function emptyEffect(accountId: number, assetId: number): EffectDraft {
     gainExclusion: 250_000,
     drop: 0.3,
     payTaxFromAccountId: 0,
+    portfolioIds: [],
+    passThrough: true,
   };
+}
+
+/**
+ * A `Spending` draft's rule: its own, or Guardrails starting at the amount
+ * the draft carried as another kind (an Expense turned into a rule keeps its
+ * yearly figure, counting its occurrences when the event repeats monthly).
+ */
+export function spendingRuleOf(draft: EffectDraft, perYear = 1): SpendingRuleSpec {
+  return draft.spendingRule ?? guardrails(draft.amount > 0 ? Math.round(draft.amount * perYear) : 60_000);
+}
+
+export function portfolioSpec(draft: EffectDraft): SpendingPortfolioSpec {
+  return draft.portfolioIds.length === 0 ? { kind: "Liquid" } : { kind: "Accounts", account_ids: draft.portfolioIds };
 }
 
 /** Which fields a form needs, so the editor renders only those. */
@@ -233,6 +262,8 @@ export interface EffectShape {
   shock: boolean;
   /** A Roth conversion's tax payer. */
   conversion: boolean;
+  /** A spending rule, its portfolio and pass-through. */
+  spending: boolean;
 }
 
 const NOTHING: EffectShape = {
@@ -254,6 +285,7 @@ const NOTHING: EffectShape = {
   sale: false,
   shock: false,
   conversion: false,
+  spending: false,
 };
 
 export function shape(form: EffectForm): EffectShape {
@@ -302,6 +334,8 @@ export function shape(form: EffectForm): EffectShape {
       return { ...NOTHING, shock: true };
     case "RothConversion":
       return { ...NOTHING, from: true, to: true, amount: true, conversion: true };
+    case "Spending":
+      return { ...NOTHING, from: true, spending: true };
     default:
       return { ...NOTHING, event: true, verb: true };
   }
@@ -326,6 +360,7 @@ const TERM: Partial<Record<keyof EffectShape, string>> = {
   sale: "the sale terms",
   shock: "the market drop",
   conversion: "who pays the tax",
+  spending: "the spending rule",
 };
 
 /** `a, b and c` — the list as it reads in the sentence below. */
@@ -385,6 +420,10 @@ export function effectProblem(draft: EffectDraft, index: number): string | null 
   if (fields.shock && !(draft.drop > 0 && draft.drop < 1)) return say("needs a drop between 0% and 100%");
   if (fields.conversion && draft.fromAccountId === draft.toAccountId)
     return say("needs a pre-tax account and a different, Roth account");
+  if (fields.spending) {
+    const problem = ruleProblem(spendingRuleOf(draft));
+    if (problem) return say(problem);
+  }
   return null;
 }
 
@@ -542,6 +581,14 @@ export function toEffectSpec(draft: EffectDraft): EffectSpec {
         to_account_id: draft.toAccountId,
         amount,
         pay_tax_from_account_id: draft.payTaxFromAccountId || null,
+      };
+    case "Spending":
+      return {
+        kind: "Spending",
+        from_account_id: draft.fromAccountId,
+        rule: spendingRuleOf(draft),
+        portfolio: portfolioSpec(draft),
+        pass_through: draft.passThrough,
       };
     default:
       return { kind: draft.verb, target_event_id: draft.targetEventId };
@@ -748,6 +795,21 @@ export function draftOfEffect(
         payTaxFromAccountId: effect.pay_tax_from_account_id ?? 0,
         ...withAmount(effect.amount),
       };
+    case "Spending": {
+      const rule = effect.rule;
+      return {
+        ...base,
+        form: "Spending",
+        fromAccountId: effect.from_account_id,
+        spendingRule: rule,
+        // An Expense this turns into starts at the rule's own amount.
+        ...(rule.rule === "Guardrails" && rule.initial.kind === "Amount"
+          ? { amount: rule.initial.amount }
+          : {}),
+        portfolioIds: effect.portfolio.kind === "Accounts" ? effect.portfolio.account_ids : [],
+        passThrough: effect.pass_through,
+      };
+    }
     case "Random":
       return { ...base, raw: effect };
   }

@@ -136,6 +136,9 @@ fn build_edit_form_for_effect(
     let events = EventsScreen::get_event_names(state);
 
     match effect {
+        EffectData::Spending { .. } => ActionResult::error(
+            "Spending rules are edited on the web; the TUI shows them read-only.",
+        ),
         EffectData::Income {
             to,
             amount,

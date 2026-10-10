@@ -31,7 +31,8 @@ import type { RunInfo } from "../api/generated/RunInfo.ts";
 import type { RunCost } from "../api/generated/RunCost.ts";
 import type { PlanArchive } from "../api/generated/PlanArchive.ts";
 import type { RunsApi } from "../api/plan.ts";
-import type { CreateRun, DrawdownBody, DrawdownComparison, Results, Run } from "../api/types.ts";
+import type { CreateRun, DrawdownBody, DrawdownComparison,
+  SpendingComparison, Results, Run } from "../api/types.ts";
 import type { LocalPlanMeta, RunEstimate } from "../local/runtime.ts";
 import type { Core } from "./core.ts";
 import { joinOutputs, splitSpecs } from "./engine.ts";
@@ -240,6 +241,22 @@ export class Runs {
         return JSON.parse(await handle.promise) as DrawdownComparison;
       } catch (thrown) {
         // The caller withdrew the question: an abort, as a fetch's would be.
+        if (signal?.aborted) throw abortError();
+        throw thrown;
+      } finally {
+        signal?.removeEventListener("abort", onAbort);
+      }
+    },
+
+    spendingCompare: async (id, body, signal) => {
+      const { snapshot } = await this.drawdownInputs(id);
+      if (signal?.aborted) throw abortError();
+      const handle = this.core.pool.drawdown({ compare: "spending", snapshot, body: JSON.stringify(body ?? {}) });
+      const onAbort = () => handle.cancel();
+      signal?.addEventListener("abort", onAbort, { once: true });
+      try {
+        return JSON.parse(await handle.promise) as SpendingComparison;
+      } catch (thrown) {
         if (signal?.aborted) throw abortError();
         throw thrown;
       } finally {

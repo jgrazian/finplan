@@ -61,6 +61,7 @@ codes! {
     NoInflation => "no_inflation",
     Assumptions => "assumptions",
     RothConversionCandidate => "roth_conversion_candidate",
+    SpendingRules => "spending_rules",
 }
 
 /// Review `g`: compile it, then look for the omissions a run cannot report
@@ -117,7 +118,7 @@ pub fn preflight(g: &ScenarioGraph) -> PreflightReport {
         .effects
         .values()
         .filter(enabled_effect)
-        .any(|e| e.kind == "Expense")
+        .any(|e| e.kind == "Expense" || e.kind == "Spending")
     {
         add(
             Code::MissingSpending,
@@ -126,6 +127,25 @@ pub fn preflight(g: &ScenarioGraph) -> PreflightReport {
                 .into(),
             "plan",
             None,
+        );
+    }
+    let rules: Vec<i64> = g
+        .effects
+        .values()
+        .filter(enabled_effect)
+        .filter(|e| e.kind == "Spending")
+        .filter_map(|e| e.event_id)
+        .collect();
+    if rules.len() > 1 {
+        add(
+            Code::SpendingRules,
+            "warning",
+            format!(
+                "{} spending rules are on. Each decides its own draw from the market, and their draws add up; a plan usually has one.",
+                rules.len()
+            ),
+            "plan",
+            rules.iter().min().copied(),
         );
     }
     if g.scenario.funding_strategy.is_none()

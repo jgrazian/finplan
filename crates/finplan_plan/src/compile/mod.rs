@@ -15,8 +15,8 @@ use finplan_core::model::{
     CatchUp, ContributionLimit, ContributionLimitPeriod, Event, EventEffect, EventTrigger,
     Financing, FixedAsset, FundingPolicy, HistoricalInflation, HistoricalReturns, IncomeType,
     InflationProfile, InvestmentContainer, LoanDetail, LotMethod, ParameterValue, Repayment,
-    RepeatInterval, ReturnProfile, TaxBracket, TaxConfig, TaxStatus, TransferAmount, TriggerOffset,
-    WithdrawalOrder, WithdrawalSources,
+    RepeatInterval, ReturnProfile, SpendingPortfolio, SpendingRule, TaxBracket, TaxConfig,
+    TaxStatus, TransferAmount, TriggerOffset, WithdrawalOrder, WithdrawalSources,
 };
 use jiff::civil::Date;
 
@@ -442,7 +442,7 @@ pub fn compile(graph: &ScenarioGraph) -> PlanResult<CompiledScenario> {
         }
     }
 
-    let config = SimulationConfig {
+    let mut config = SimulationConfig {
         return_profiles,
         inflation_profile,
         asset_returns,
@@ -458,6 +458,7 @@ pub fn compile(graph: &ScenarioGraph) -> PlanResult<CompiledScenario> {
         collect_ledger: graph.scenario.collect_ledger != 0,
         funding: funding_policy(graph, &id_map)?,
     };
+    fill_vpw_returns(&mut config);
 
     Ok(CompiledScenario {
         config,
@@ -466,6 +467,38 @@ pub fn compile(graph: &ScenarioGraph) -> PlanResult<CompiledScenario> {
         account_names,
         event_names,
     })
+}
+
+/// Give each VPW rule that names no real return of its own the one its
+/// portfolio can expect under the plan's assumptions.
+fn fill_vpw_returns(config: &mut SimulationConfig) {
+    let mut derived = Vec::new();
+    for (e, event) in config.events.iter().enumerate() {
+        for (f, effect) in event.effects.iter().enumerate() {
+            if let EventEffect::Spending {
+                rule: SpendingRule::Vpw { real_return, .. },
+                portfolio,
+                ..
+            } = effect
+                && real_return.is_nan()
+            {
+                derived.push((
+                    e,
+                    f,
+                    finplan_core::spending::expected_real_return(config, portfolio),
+                ));
+            }
+        }
+    }
+    for (e, f, value) in derived {
+        if let EventEffect::Spending {
+            rule: SpendingRule::Vpw { real_return, .. },
+            ..
+        } = &mut config.events[e].effects[f]
+        {
+            *real_return = value;
+        }
+    }
 }
 
 /// The plan's tax config as the engine takes it: its federal and capital
@@ -1040,6 +1073,117 @@ pub fn check_roth_conversion(
     Ok(())
 }
 
+/// A `Spending` effect is one of a monthly, quarterly or yearly event's own
+/// effects (never a `Random` branch), pays from a bank or investment account,
+/// reads a portfolio of bank and investment accounts, and — for VPW — spends
+/// down by an age the owner has not reached when it starts. Checked when the
+/// plan compiles and when an edit writes the effect.
+pub fn check_spending(
+    graph: &ScenarioGraph,
+    event_id: Option<i64>,
+    from: i64,
+    rule: &crate::specs::SpendingRuleSpec,
+    portfolio: &crate::specs::SpendingPortfolioSpec,
+) -> PlanResult<()> {
+    rule.validate()?;
+    let Some(event_id) = event_id else {
+        return Err(PlanError::unprocessable(
+            "a Spending effect belongs to an event itself, not to a random branch",
+        ));
+    };
+    let cash_account = |id: i64| {
+        graph
+            .accounts
+            .iter()
+            .any(|a| a.id == id && (a.flavor == "Bank" || a.flavor == "Investment"))
+    };
+    if !cash_account(from) {
+        return Err(PlanError::unprocessable(
+            "spending is paid from a bank or investment account",
+        ));
+    }
+    if let crate::specs::SpendingPortfolioSpec::Accounts { account_ids } = portfolio {
+        if account_ids.is_empty() {
+            return Err(PlanError::unprocessable(
+                "a spending portfolio names at least one account",
+            ));
+        }
+        if !account_ids.iter().all(|id| cash_account(*id)) {
+            return Err(PlanError::unprocessable(
+                "a spending portfolio holds bank and investment accounts only, not property or debts",
+            ));
+        }
+    }
+    let trigger = graph
+        .event_trigger
+        .get(&event_id)
+        .and_then(|id| graph.triggers.get(id));
+    let interval_ok = trigger.is_some_and(|t| {
+        t.kind == "Repeating"
+            && matches!(
+                t.interval.as_deref(),
+                Some("Monthly" | "Quarterly" | "Yearly")
+            )
+    });
+    // The event's own trigger is written after its effects when an event is
+    // created, so a missing one is not yet an error.
+    if trigger.is_some() && !interval_ok {
+        return Err(PlanError::unprocessable(
+            "a Spending effect's event repeats monthly, quarterly or yearly",
+        ));
+    }
+    if let crate::specs::SpendingRuleSpec::Vpw { final_age, .. } = rule {
+        let start_age = spending_start_age(graph, trigger).ok_or_else(|| {
+            PlanError::unprocessable("VPW spends down by an age, so the plan needs a birth date")
+        })?;
+        if i64::from(*final_age) <= start_age {
+            return Err(PlanError::unprocessable(format!(
+                "VPW's final age ({final_age}) must be above the age spending starts at ({start_age})"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// The owner's age in whole years when an event's repeating trigger starts:
+/// its start condition when that is a date or an age, the plan's start
+/// otherwise. `None` without a birth date.
+fn spending_start_age(
+    graph: &ScenarioGraph,
+    trigger: Option<&crate::graph::TriggerRow>,
+) -> Option<i64> {
+    let birth = parse_date(graph.scenario.birth_date.as_deref()?, "birth_date").ok()?;
+    let age_on = |date: Date| {
+        let mut years = i64::from(date.year() - birth.year());
+        if (date.month(), date.day()) < (birth.month(), birth.day()) {
+            years -= 1;
+        }
+        years
+    };
+    let plan_start = parse_date(&graph.scenario.start_date, "start_date").ok()?;
+    let start = trigger
+        .and_then(|t| t.start_trigger_id)
+        .and_then(|id| graph.triggers.get(&id));
+    let parameter =
+        |id: Option<i64>| id.and_then(|id| graph.parameters.iter().find(|p| p.id == id));
+    let at = match start {
+        Some(t) if t.kind == "Age" => t
+            .age_years
+            .or_else(|| parameter(t.parameter_id).and_then(|p| p.age_years)),
+        Some(t) if t.kind == "Date" => t
+            .on_date
+            .clone()
+            .or_else(|| parameter(t.parameter_id).and_then(|p| p.date_value.clone()))
+            .and_then(|d| parse_date(&d, "on_date").ok())
+            .map(age_on),
+        _ => None,
+    };
+    Some(
+        at.unwrap_or_else(|| age_on(plan_start))
+            .max(age_on(plan_start)),
+    )
+}
+
 fn build_effect(
     graph: &ScenarioGraph,
     ids: &IdMap,
@@ -1219,6 +1363,33 @@ fn build_effect(
                     .pay_tax_from_account_id
                     .map(|id| ids.account(id))
                     .transpose()?,
+            }
+        }
+        "Spending" => {
+            let rule = crate::specs::SpendingRuleSpec::from_column(
+                row.spending_rule.as_deref().ok_or_else(|| {
+                    PlanError::unprocessable("Spending effect is missing its rule")
+                })?,
+            )?;
+            let portfolio = crate::specs::events::read_spending_portfolio(graph, effect_id);
+            check_spending(graph, row.event_id, from()?, &rule, &portfolio)?;
+            EventEffect::Spending {
+                from: ids.account(from()?)?,
+                // A VPW rule without its own return is given the plan's once
+                // the whole config is built (`fill_vpw_returns`).
+                rule: rule.to_core(f64::NAN),
+                portfolio: match portfolio {
+                    crate::specs::SpendingPortfolioSpec::Liquid => SpendingPortfolio::Liquid,
+                    crate::specs::SpendingPortfolioSpec::Accounts { account_ids } => {
+                        SpendingPortfolio::Accounts(
+                            account_ids
+                                .iter()
+                                .map(|id| ids.account(*id))
+                                .collect::<PlanResult<_>>()?,
+                        )
+                    }
+                },
+                pass_through: row.pass_through.unwrap_or(1) != 0,
             }
         }
         "MarketShock" => EventEffect::MarketShock {

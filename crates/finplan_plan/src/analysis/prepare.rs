@@ -7,10 +7,12 @@
 //! the browser and one analysed on a server are turned away for the same
 //! reasons.
 
-use finplan_core::analysis::{SolveConfig, SolveConstraint, SweepConfig, SweepParameter};
+use finplan_core::analysis::{
+    SolveConfig, SolveConstraint, SolveConstraintMetric, SweepConfig, SweepParameter,
+};
 use finplan_core::config::SimulationConfig;
 
-use super::params::{PlanParameter, parameters};
+use super::params::{PlanParameter, analysis_parameters};
 use super::request::{AxisRequest, ConstraintRequest, CreateAnalysis};
 use crate::compile;
 use crate::error::{PlanError, PlanResult};
@@ -142,12 +144,12 @@ pub fn prepare(
     let parallel_batches = limits.parallel_batches;
     let is_solve = matches!(&body, CreateAnalysis::Solve { .. });
     let compiled = compile::compile(graph)?;
-    let available = parameters(&compiled);
+    let available = analysis_parameters(&compiled);
     // A what-if can be all shocks and one-offs, so it is the one analysis that
     // does not need a named parameter to vary.
     if available.is_empty() && !matches!(&body, CreateAnalysis::WhatIf { .. }) {
         return Err(PlanError::unprocessable(
-            "this plan has no named parameters to analyse — add parameters on the Plan tab and reference them in amounts or schedules",
+            "this plan has no named parameters or spending rules to analyse — add parameters on the Plan tab and reference them in amounts or schedules",
         ));
     }
 
@@ -220,8 +222,16 @@ pub fn prepare(
             objective,
             constraint,
             min_value,
+            lowest_draw_floor,
             iterations,
         } => {
+            if let Some(floor) = lowest_draw_floor
+                && !(floor.is_finite() && floor >= 0.0)
+            {
+                return Err(PlanError::invalid(
+                    "the lowest-draw floor is an amount of zero or more",
+                ));
+            }
             if vary.is_empty() || vary.len() > MAX_VARIED {
                 return Err(PlanError::invalid(format!(
                     "a solve varies between one and {MAX_VARIED} parameters"
@@ -246,6 +256,13 @@ pub fn prepare(
                             .into(),
                         min_value,
                     },
+                    also: lowest_draw_floor
+                        .map(|min_real| SolveConstraint {
+                            metric: SolveConstraintMetric::LowestDrawP10 { min_real },
+                            min_value: 0.0,
+                        })
+                        .into_iter()
+                        .collect(),
                     mc_iterations: iterations_or_default(iterations, 250, cap)?,
                     parallel_batches,
                     seed: Some(ANALYSIS_SEED),
