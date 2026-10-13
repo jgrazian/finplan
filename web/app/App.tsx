@@ -70,6 +70,8 @@ import type { InflationProfile, Scenario } from "@/lib/types";
 import { BETA_ACCESS_NOTICE } from "@/lib/view/access";
 import { clockTime, pathChecks, summarizeIssues } from "@/lib/view/issues";
 import { type Destination, noteCounts } from "@/lib/view/review";
+import { examplePlan, freshName } from "@/lib/view/setup";
+import { useSubmit } from "@/lib/hooks/useSubmit";
 
 /** The tabs that describe the scenario; account settings is not one. */
 type ScreenTab = Exclude<TabId, "account">;
@@ -526,6 +528,38 @@ function Workbench({
     return () => clearTimeout(timer);
   }, [scenarioSlug, scenarioId, workspaceId, requestRun, effort]);
 
+  // The start card's example: an invented household made through guided
+  // setup in the home a new plan goes to, then opened and run like one.
+  const example = useSubmit();
+  const takenNames = useMemo(() => list.map((row) => row.name), [list]);
+  const openExample = useCallback(() => {
+    let created: ApiScenario | undefined;
+    example.run(
+      async () => {
+        const homeApi = planApiFor(newHome);
+        const [returnProfiles, inflation, taxes] = await Promise.all([
+          homeApi.returnProfiles.list(),
+          homeApi.inflationProfiles.list(),
+          homeApi.taxConfigs.list(),
+        ]);
+        const plan = examplePlan({
+          name: freshName(takenNames, "Example plan"),
+          returnProfiles,
+          inflationProfiles: inflation,
+          taxConfigs: taxes,
+        });
+        created = await homeApi.scenarios.get((await homeApi.scenarios.setup(plan)).scenario_id);
+      },
+      () => {
+        if (!created) return;
+        setRecentlyCreated(created);
+        runWhenOpen.current = created.slug;
+        nav.openScenario(created.slug, "results");
+        scenarios.reload();
+      },
+    );
+  }, [example, newHome, takenNames, nav, scenarios]);
+
   // The offload shares the header's progress bar with local runs.
   const offloadRun =
     scenarioId != null && localId != null
@@ -708,6 +742,7 @@ function Workbench({
           activeTab={creating ? undefined : tab}
           // Account settings stays a way back to the start card.
           tabsDisabled={noPlans && tab !== "account" ? "Create a scenario first" : undefined}
+          start={noPlans}
           onTabChange={(tab) => {
             // New scenario is a page, not a tab: any tab leaves it.
             setCreating(false);
@@ -826,7 +861,7 @@ function Workbench({
               // A draft started here spent one of the month's drafts.
               access.reload();
             }}
-            takenNames={list.map((row) => row.name)}
+            takenNames={takenNames}
             onCreated={(created, nextTab) => {
               setRecentlyCreated(created);
               nav.openScenario(created.slug, nextTab);
@@ -883,6 +918,10 @@ function Workbench({
               <StoreClearedNotice onImport={() => setHomeRequest({ kind: "files" })} />
             )}
             <StartCard
+              onExample={openExample}
+              exampleBusy={example.busy}
+              exampleError={example.error}
+              account={user.guest ? { onSignUp, onSignIn } : undefined}
               local={localMode}
               onCreate={() => setCreating(true)}
               onImport={() => setHomeRequest({ kind: "files" })}

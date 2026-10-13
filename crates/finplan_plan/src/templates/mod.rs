@@ -1793,6 +1793,30 @@ pub fn investment_account(
     add(ChangeTarget::NewAccount(key.into()), body)
 }
 
+/// A taxable investment account holding only cash, growing at the given
+/// profile: high-yield savings, a money market fund or CDs. Unlike a bank
+/// account, a funding sweep draws on it (its cash before any holdings).
+pub fn savings_account(
+    key: &str,
+    name: &str,
+    cash: f64,
+    cash_return_profile_id: RowRef,
+    sort_order: Option<i64>,
+) -> Change {
+    let mut body = json!({
+        "name": name,
+        "flavor": "Investment",
+        "tax_status": "Taxable",
+        "cash_value": cash,
+        "cash_return_profile_id": cash_return_profile_id.json(),
+        "positions": [],
+    });
+    if let Some(sort_order) = sort_order {
+        body["sort_order"] = json!(sort_order);
+    }
+    add(ChangeTarget::NewAccount(key.into()), body)
+}
+
 /// An asset priced at 1, so a position's units are dollars, moving with the
 /// given return profile.
 pub fn allocation_asset(

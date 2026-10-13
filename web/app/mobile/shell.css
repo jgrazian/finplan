@@ -93,6 +93,18 @@
     display: none;
   }
 
+  /* The phone header keeps the mark, the switcher and Run. Sign in stays as
+     one link (its form offers Sign up); before any plan exists both are in
+     the start card instead, and Run takes the switcher's place on the right. */
+  .app-header-signup,
+  .app-header-start .app-header-signin {
+    display: none;
+  }
+
+  .app-header-start .app-header-run {
+    margin-left: auto;
+  }
+
   .mobile-tabbar {
     position: fixed;
     z-index: 40;

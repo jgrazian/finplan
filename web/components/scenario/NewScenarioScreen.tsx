@@ -41,18 +41,19 @@ import {
   type PreviewParameter,
 } from "./SetupPreview";
 import { defaultTaxConfig } from "@/lib/view/assumptions";
+import { birthDateOf, birthParts, defaultReturnProfileIds, freshName } from "@/lib/view/setup";
 
 /** The step strip's short names, then each step's question and lead. */
 const steps = [
   {
     short: "Details",
     title: "Start with the plan details",
-    lead: "Your birth date and how far ahead to plan. Answer the questions in order or jump between them with the steps above, or switch to Blank to start empty with these details.",
+    lead: "The year you were born and how far ahead to plan. Answer the questions in order or jump between them with the steps above, or switch to Blank to start empty with these details.",
   },
   {
     short: "Cash",
-    title: "Do you have money in a checking or savings account?",
-    lead: "Checking is where salary lands and spending is paid from.",
+    title: "Do you have money in checking, savings or CDs?",
+    lead: "Checking is where salary lands and spending is paid from. High-yield savings, money market funds and CDs are kept as their own account.",
   },
   {
     short: "401(k)",
@@ -88,18 +89,24 @@ const steps = [
 
 const EMPLOYEE_401K_DEFERRAL_LIMIT_2026 = 24_500;
 
+const MONTHS = [
+  "January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December",
+] as const;
+
 // The steps whose answers first write an event, for "just added".
 const INCOME_STEP = 4;
 const SAVING_STEP = 5;
 const ASSUME_STEP = 6;
 
-const defaultReturnProfileIds = (profiles: Profile[]) => ({
-  cash: profiles.find((profile) => profile.name === "Cash / T-Bills")?.id ?? 0,
-  stocks: profiles.find((profile) => profile.name === "US Total Market")?.id ?? 0,
-  bonds: profiles.find((profile) => profile.name === "US Aggregate Bonds")?.id ?? 0,
-});
-
 type SetupDraft = SetupPlan & {
+  /** Only the year is asked for; 0 until it is typed. */
+  birth_year: number;
+  /** 1–12, or null to assume mid-year. */
+  birth_month: number | null;
+  /** Kept apart from checking, spent before investments are sold. */
+  high_yield_savings: number;
+  savings_profile_id: number;
   has_cash: boolean | null;
   has_401k: boolean | null;
   has_other_investments: boolean | null;
@@ -110,15 +117,6 @@ type SetupDraft = SetupPlan & {
   /** Fixed, or a rule that adjusts it with the market (spec 22). */
   retirement_spending_choice: SpendingChoice;
 };
-
-/** What a plan is called until it is renamed: unique, since names are per account. */
-function freshName(taken: readonly string[]): string {
-  const names = new Set(taken.map((name) => name.trim().toLowerCase()));
-  for (let n = 1; ; n++) {
-    const name = n === 1 ? "My plan" : `My plan ${n}`;
-    if (!names.has(name.toLowerCase())) return name;
-  }
-}
 
 /** What the setup suggests for retirement spending. */
 const SUGGESTED_CHOICE: SpendingChoice = "Guardrails";
@@ -140,6 +138,7 @@ type AmountField =
   | "duration_years"
   | "retirement_age"
   | "cash"
+  | "high_yield_savings"
   | "retirement_401k"
   | "investments"
   | "stock_percent"
@@ -224,6 +223,8 @@ function TakeHomeLine({ year, taxName }: { year: TakeHome; taxName?: string }) {
 function setupPlanOf(draft: SetupDraft): SetupPlan {
   const plan = { ...draft };
   const answers = plan as Partial<SetupDraft>;
+  delete answers.birth_year;
+  delete answers.birth_month;
   delete answers.has_cash;
   delete answers.has_401k;
   delete answers.has_other_investments;
@@ -442,9 +443,15 @@ function GuidedSetup(
       name: freshName(props.takenNames ?? []),
       start_date: new Date().toISOString().slice(0, 10),
       birth_date: props.defaults.birth_date ?? "",
+      ...(() => {
+        const { year, month } = birthParts(props.defaults.birth_date);
+        return { birth_year: year, birth_month: month };
+      })(),
       duration_years: props.defaults.default_duration_years,
       retirement_age: 65,
       cash: 0,
+      high_yield_savings: 0,
+      savings_profile_id: profileIds.cash,
       retirement_401k: 0,
       investments: 0,
       stock_percent: 60,
@@ -480,6 +487,14 @@ function GuidedSetup(
         ...empty,
         ...saved,
         name: saved.name?.trim() ? saved.name : empty.name,
+        // A draft saved before only the year was asked kept the full date.
+        ...(saved.birth_year == null
+          ? (() => {
+              const { year, month } = birthParts(saved.birth_date);
+              return { birth_year: year, birth_month: month };
+            })()
+          : {}),
+        savings_profile_id: saved.savings_profile_id || empty.savings_profile_id,
         retirement_401k: saved.retirement_401k ?? 0,
         retirement_401k_contribution_percent:
           saved.retirement_401k_contribution_percent ?? 0,
@@ -523,6 +538,7 @@ function GuidedSetup(
         setDraft((current) => ({
           ...current,
           cash_profile_id: current.cash_profile_id || profileIds.cash,
+          savings_profile_id: current.savings_profile_id || profileIds.cash,
           stock_profile_id: current.stock_profile_id || profileIds.stocks,
           bond_profile_id: current.bond_profile_id || profileIds.bonds,
         }));
@@ -547,6 +563,12 @@ function GuidedSetup(
       assumptions_confirmed: value.assumptions_confirmed ?? false,
     }));
   };
+  const patchBirth = (birth_year: number, birth_month: number | null) =>
+    patch({
+      birth_year,
+      birth_month,
+      birth_date: birthDateOf(birth_year, birth_month, props.defaults.birth_date),
+    });
   const number = (label: string, field: AmountField, max?: number, dollars = false) => (
     <Field label={label}>
       <NumberInput
@@ -563,7 +585,7 @@ function GuidedSetup(
   );
   const choice = (
     label: string,
-    field: "cash_profile_id" | "stock_profile_id" | "bond_profile_id",
+    field: "cash_profile_id" | "savings_profile_id" | "stock_profile_id" | "bond_profile_id",
   ) => (
     <Field label={label}>
       <Dropdown
@@ -579,6 +601,7 @@ function GuidedSetup(
   );
 
   const cash = draft.has_cash ? draft.cash : 0;
+  const savings = draft.has_cash ? draft.high_yield_savings : 0;
   const retirement401k = draft.has_401k ? draft.retirement_401k : 0;
   const otherInvestments = draft.has_other_investments ? draft.investments : 0;
   const invested = retirement401k + otherInvestments;
@@ -604,7 +627,9 @@ function GuidedSetup(
     taxConfig,
   );
   const hasInvestments = invested > 0 || annual401kContribution > 0;
-  const wealth = cash + invested;
+  // What spending can draw on once checking runs short.
+  const canFund = hasInvestments || savings > 0;
+  const wealth = cash + savings + invested;
   const end =
     draft.start_date && draft.duration_years > 0 && draft.duration_years <= 120
       ? addYears(draft.start_date, draft.duration_years)
@@ -618,10 +643,10 @@ function GuidedSetup(
   const stepProblem = (index: number): string | undefined => {
     if (index === nameStep && !draft.name.trim()) return "Name the plan.";
     if (index === nameStep && takenName) return `You already have a plan named ${takenName}.`;
-    if (index === 0 && (!draft.birth_date || !end))
-      return "Enter a birth date and a valid plan length.";
+    if (index === 0 && !draft.birth_date) return "Enter the year you were born, all four digits.";
     if (index === 0 && draft.birth_date > draft.start_date)
-      return "Birth date must be on or before the plan start date.";
+      return "The year you were born must be before the plan starts.";
+    if (index === 0 && !end) return "Enter a valid plan length.";
     if (index === 1 && draft.has_cash == null) return "Choose Yes or No to continue.";
     if (index === 2 && draft.has_401k == null) return "Choose Yes or No to continue.";
     if (index === 2 && draft.has_401k && draft.retirement_401k <= 0)
@@ -694,9 +719,11 @@ function GuidedSetup(
       const result = await api.scenarios.setup({
         ...plan,
         cash,
+        high_yield_savings: savings,
+        savings_profile_id: savings > 0 ? draft.savings_profile_id : undefined,
         retirement_401k: retirement401k,
         investments: otherInvestments,
-        fund_from_investments: hasInvestments && draft.fund_from_investments,
+        fund_from_investments: canFund && draft.fund_from_investments,
       });
       const scenario = await api.scenarios.get(result.scenario_id);
       localStorage.removeItem(key);
@@ -725,6 +752,15 @@ function GuidedSetup(
       balance: cash,
     });
   }
+  if (savings > 0) {
+    accounts.push({
+      name: "High-yield savings",
+      kind: "Cash",
+      tax: TAX_TAGS.Taxable,
+      profile: profileName(draft.savings_profile_id) ?? "Cash",
+      balance: savings,
+    });
+  }
   if (retirement401k > 0 || annual401kContribution > 0) {
     accounts.push({
       name: "401(k)",
@@ -747,8 +783,8 @@ function GuidedSetup(
   // creates them only when an event does).
   const retireAt = { slot: `Retirement age (${draft.retirement_age})` };
   const funding: PreviewEvent["parts"] =
-    hasInvestments && draft.fund_from_investments
-      ? ["· shortfall from", { slot: "investments" }]
+    canFund && draft.fund_from_investments
+      ? ["· shortfall from", { slot: hasInvestments ? "investments" : "savings" }]
       : [];
   const events: PreviewEvent[] = [];
   if (draft.annual_income > 0) {
@@ -786,7 +822,7 @@ function GuidedSetup(
   const retirementRule = setupRule(
     draft.retirement_spending_choice,
     monthlyRetirementSpending * 12,
-    draft.cash + draft.retirement_401k + draft.investments,
+    cash + savings + invested,
   );
   if (monthlyRetirementSpending > 0) {
     events.push({
@@ -853,7 +889,7 @@ function GuidedSetup(
           },
           {
             label: "Spending funding",
-            value: hasInvestments && draft.fund_from_investments ? "Checking, then savings" : "Checking only",
+            value: canFund && draft.fund_from_investments ? "Checking, then savings" : "Checking only",
           },
         ]
       : undefined;
@@ -888,6 +924,15 @@ function GuidedSetup(
       value: profileName(draft.cash_profile_id) ?? "",
       why: profileDescription(draft.cash_profile_id),
     },
+    ...(savings > 0
+      ? [
+          {
+            label: "High-yield savings returns",
+            value: profileName(draft.savings_profile_id) ?? "",
+            why: profileDescription(draft.savings_profile_id),
+          },
+        ]
+      : []),
     {
       label: "Inflation",
       value: inflationProfile?.name ?? "No inflation",
@@ -898,7 +943,7 @@ function GuidedSetup(
       value: taxConfig?.name ?? "No taxes modeled",
       why: taxConfig?.description ?? undefined,
     },
-    ...(hasInvestments
+    ...(canFund
       ? [
           {
             label: "When checking runs short",
@@ -929,7 +974,8 @@ function GuidedSetup(
           <>
             <span className="ns-bar-sep">|</span>
             <span>
-              born {draft.birth_date}
+              born {draft.birth_month ? `${MONTHS[draft.birth_month - 1]} ` : ""}
+              {draft.birth_year}
               {age != null && <span className="ns-mut"> · {age} today</span>}
             </span>
           </>
@@ -985,18 +1031,38 @@ function GuidedSetup(
               {step === 0 && (
                 <>
                   <DialogRow>
-                    <Field label="Birth date">
-                      <DateInput
-                        required
-                        value={draft.birth_date}
-                        onValueChange={(birth_date) => patch({ birth_date })}
+                    <Field label="Year you were born">
+                      <NumberInput
+                        aria-label="Year you were born"
+                        nullable
+                        value={draft.birth_year || null}
+                        group={false}
+                        decimals={0}
+                        placeholder="e.g. 1985"
+                        onValueChange={(year) => patchBirth(year ?? 0, draft.birth_month)}
                       />
                     </Field>
-                    {blank ? (
-                      <div />
-                    ) : (
-                      number("Retirement age", "retirement_age", 120)
-                    )}
+                    <Field label="Month (optional)">
+                      <Dropdown
+                        className="dd-field"
+                        ariaLabel="Birth month"
+                        options={[
+                          { value: 0, label: "Skip — assume mid-year" },
+                          ...MONTHS.map((label, index) => ({ value: index + 1, label })),
+                        ]}
+                        value={draft.birth_month ?? 0}
+                        maxMenuHeight={300}
+                        onChange={(month) => patchBirth(draft.birth_year, month || null)}
+                      />
+                    </Field>
+                  </DialogRow>
+                  <p className="ns-mut">
+                    Your age sets when retirement starts and when required withdrawals begin. The
+                    year is enough; a month makes those dates a little more exact.
+                  </p>
+                  <DialogRow>
+                    {blank ? <div /> : number("Retirement age", "retirement_age", 120)}
+                    {number("Plan length in years", "duration_years", 120)}
                   </DialogRow>
                   <DialogRow>
                     <Field label="Plan start date">
@@ -1006,7 +1072,7 @@ function GuidedSetup(
                         onValueChange={(start_date) => patch({ start_date })}
                       />
                     </Field>
-                    {number("Plan length in years", "duration_years", 120)}
+                    <div />
                   </DialogRow>
                   <p>
                     {end
@@ -1023,8 +1089,22 @@ function GuidedSetup(
               {step === 1 && (
                 <>
                   <YesNo name="has-cash" value={draft.has_cash} onChange={(has_cash) => patch({ has_cash })} />
-                  {draft.has_cash &&
-                    number("Total checking and savings balance", "cash", undefined, true)}
+                  {draft.has_cash && (
+                    <>
+                      {number("Checking and everyday savings", "cash", undefined, true)}
+                      {number(
+                        "High-yield savings, money market funds or CDs (optional)",
+                        "high_yield_savings",
+                        undefined,
+                        true,
+                      )}
+                      <p className="ns-mut">
+                        Kept as its own account, earning{" "}
+                        {profileName(draft.savings_profile_id) ?? "a cash rate"} by default. When
+                        checking runs short, it is spent before any investments are sold.
+                      </p>
+                    </>
+                  )}
                   {draft.has_cash === false && (
                     <p>
                       We&rsquo;ll start checking at $0 so your modeled income and spending still have a
@@ -1181,6 +1261,7 @@ function GuidedSetup(
               {step === 6 && (customizing || stepProblem(6)) && (
                 <>
                   {choice("Cash return assumption", "cash_profile_id")}
+                  {savings > 0 && choice("High-yield savings return assumption", "savings_profile_id")}
                   {hasInvestments && (
                     <>
                       {number("Stock allocation percent", "stock_percent", 100)}
@@ -1194,6 +1275,10 @@ function GuidedSetup(
                         } bonds = ${invested.toLocaleString()}. The same starter allocation is applied
                         to each investment account and new 401(k) contributions.
                       </p>
+                    </>
+                  )}
+                  {canFund && (
+                    <>
                       <Field label="Spending funding">
                         <Dropdown
                           className="dd-field"
@@ -1212,8 +1297,8 @@ function GuidedSetup(
                         />
                       </Field>
                       <p className="ns-mut">
-                        When authorized, annual expenses draw only the checking shortfall from your
-                        investment accounts using a tax-aware order. Withdrawals may incur gains tax,
+                        When authorized, annual expenses draw only the checking shortfall from
+                        high-yield savings first, then your investment accounts in a tax-aware order. Withdrawals may incur gains tax,
                         income tax, or early-withdrawal penalties.
                       </p>
                     </>
@@ -1264,7 +1349,9 @@ function GuidedSetup(
                     {draft.start_date} to {end} · retire at {draft.retirement_age}
                   </p>
                   <p>
-                    Checking and savings ${cash.toLocaleString()} + 401(k) ${retirement401k.toLocaleString()}
+                    Checking ${cash.toLocaleString()}
+                    {savings > 0 && ` + high-yield savings $${savings.toLocaleString()}`}
+                    {" + "}401(k) ${retirement401k.toLocaleString()}
                     {" + "}other investments ${otherInvestments.toLocaleString()} = ${wealth.toLocaleString()}
                     {" opening wealth."}
                   </p>
@@ -1289,7 +1376,7 @@ function GuidedSetup(
                     </p>
                   )}
                   <p>
-                    Funding: {hasInvestments && draft.fund_from_investments
+                    Funding: {canFund && draft.fund_from_investments
                       ? "Checking, then withdraw from savings for both working and retirement spending"
                       : "Checking only; investments do not automatically fund spending"}.
                   </p>

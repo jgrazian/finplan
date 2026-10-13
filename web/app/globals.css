@@ -205,6 +205,21 @@ body {
   margin-top: 22px;
 }
 
+.start-card .start-more {
+  margin-top: 12px;
+}
+
+/* A guest's sign-in, here only where the header has no room for it. */
+.start-account {
+  display: none;
+}
+
+@media (max-width: 639px) {
+  .start-card .start-account {
+    display: block;
+  }
+}
+
 .start-sample {
   display: flex;
   flex-direction: column;

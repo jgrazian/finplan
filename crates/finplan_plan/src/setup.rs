@@ -21,6 +21,7 @@ use crate::suggest::{Change, Created, resolve_steps};
 use crate::templates::{
     Allocation, Employee401k, RecurringExpenseParams, RowRef, SalaryParams, Template, When,
     allocation_asset, bank_account, expand_template, investment_account, parameter, position,
+    savings_account,
 };
 
 /// The employee 401(k) deferral limit guided setup caps a contribution at: the
@@ -64,6 +65,29 @@ pub struct SetupPlan {
     #[serde(default)]
     #[ts(optional)]
     pub retirement_spending_rule: Option<crate::specs::SpendingRuleSpec>,
+    /// High-yield savings, money market funds and CDs, kept apart from
+    /// checking as cash the funding policy spends before selling holdings.
+    #[serde(default)]
+    #[ts(optional)]
+    pub high_yield_savings: Option<f64>,
+    /// What that cash earns. Absent, it earns the cash profile.
+    #[serde(default)]
+    #[ts(optional)]
+    pub savings_profile_id: Option<i64>,
+}
+
+impl SetupPlan {
+    /// The high-yield savings balance, zero when there is none.
+    #[must_use]
+    pub fn savings(&self) -> f64 {
+        self.high_yield_savings.unwrap_or(0.)
+    }
+
+    /// The return profile high-yield savings earns, when the plan has any.
+    #[must_use]
+    pub fn savings_profile(&self) -> Option<i64> {
+        (self.savings() > 0.).then_some(self.savings_profile_id.unwrap_or(self.cash_profile_id))
+    }
 }
 
 /// Check the answers, as `POST /scenarios/setup` does before it writes anything.
@@ -95,6 +119,7 @@ pub fn validate(p: &SetupPlan) -> PlanResult<()> {
         p.retirement_401k_contribution_percent,
         p.annual_spending,
         p.retirement_spending,
+        p.savings(),
     ]
     .iter()
     .any(|n| !n.is_finite() || *n < 0.)
@@ -112,11 +137,11 @@ pub fn validate(p: &SetupPlan) -> PlanResult<()> {
         ));
     }
     if p.fund_from_investments
-        && p.retirement_401k + p.investments == 0.
+        && p.retirement_401k + p.investments + p.savings() == 0.
         && p.retirement_401k_contribution_percent == 0.
     {
         return Err(PlanError::invalid(
-            "Investment funding requires a 401(k) or another investment account",
+            "Investment funding requires savings, a 401(k) or another investment account",
         ));
     }
     if !p.assumptions_confirmed
@@ -156,6 +181,17 @@ pub fn lower(p: &SetupPlan, annual_401k_contribution: f64) -> PlanResult<Vec<Cha
         Some(0),
     )];
     let checking = RowRef::new("checking");
+    // Made before the investment accounts: a sweep takes taxable accounts in
+    // the order they were made, so savings is spent before stocks are sold.
+    if let Some(profile) = p.savings_profile() {
+        changes.push(savings_account(
+            "savings",
+            "High-yield savings",
+            p.savings(),
+            RowRef::Id(profile),
+            Some(0),
+        ));
+    }
     let mut investment_accounts = Vec::new();
     let mut retirement_account = None;
     if p.retirement_401k > 0. || annual_401k_contribution > 0. {
@@ -348,6 +384,7 @@ pub fn create_plan(
     let invested = has_investments(p, contribution);
     let profile_known = |id: i64| library.return_profiles.iter().any(|r| r.id == id);
     let known = profile_known(p.cash_profile_id)
+        && p.savings_profile().is_none_or(profile_known)
         && (!invested || (profile_known(p.stock_profile_id) && profile_known(p.bond_profile_id)))
         && p.inflation_profile_id
             .is_none_or(|id| library.inflation_profiles.iter().any(|r| r.id == id))
@@ -411,6 +448,8 @@ mod tests {
             fund_from_investments: true,
             assumptions_confirmed: true,
             retirement_spending_rule: None,
+            high_yield_savings: None,
+            savings_profile_id: None,
         }
     }
 
@@ -508,6 +547,42 @@ mod tests {
                 .iter()
                 .any(|w| w.kind == finplan_core::model::WarningKind::CashShortfall)
         );
+    }
+
+    #[test]
+    fn high_yield_savings_is_its_own_account_that_funding_spends() {
+        let library = crate::library::seed();
+        let mut a = answers(&library);
+        // Nothing invested: savings is the only place spending can come from.
+        (a.cash, a.retirement_401k, a.investments) = (5_000.0, 0.0, 0.0);
+        (a.annual_income, a.retirement_401k_contribution_percent) = (0.0, 0.0);
+        a.high_yield_savings = Some(3_000_000.0);
+        a.stock_profile_id = 9_999;
+        a.duration_years = 5;
+        let plan = create_plan(&a, &library, 3, "2026-10-03 12:00:00").unwrap();
+        let savings = plan
+            .accounts
+            .iter()
+            .find(|account| account.name == "High-yield savings")
+            .expect("a savings account");
+        assert_eq!(savings.flavor, "Investment");
+        let result =
+            finplan_core::simulation::simulate(&compile(&plan).unwrap().config, 7).unwrap();
+        assert!(
+            !result
+                .warnings
+                .iter()
+                .any(|w| w.kind == finplan_core::model::WarningKind::CashShortfall),
+            "{:?}",
+            result.warnings
+        );
+
+        // Its profile must be one the library has.
+        a.savings_profile_id = Some(9_999);
+        assert!(matches!(
+            create_plan(&a, &library, 4, "now"),
+            Err(PlanError::Invalid(message)) if message.contains("unavailable")
+        ));
     }
 
     #[test]

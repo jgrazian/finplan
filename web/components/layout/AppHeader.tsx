@@ -45,6 +45,7 @@ export function AppHeader<T extends string>({
   activeTab,
   onTabChange,
   tabsDisabled,
+  start,
   scenarios,
   activeScenarioId,
   onScenarioChange,
@@ -75,6 +76,11 @@ export function AppHeader<T extends string>({
    * on hover. Set, every tab is greyed out and none reads as current.
    */
   tabsDisabled?: string;
+  /**
+   * No plan exists yet. The switcher, which would only say so, steps out, and
+   * on a phone Sign up and Sign in leave the header for the start card.
+   */
+  start?: boolean;
   scenarios: Scenario[];
   activeScenarioId: string;
   onScenarioChange: (id: string) => void;
@@ -165,7 +171,7 @@ export function AppHeader<T extends string>({
   return (
     <>
     <header
-      className="app-header"
+      className={start ? "app-header app-header-start" : "app-header"}
       style={{
         display: "flex",
         alignItems: "center",
@@ -205,6 +211,7 @@ export function AppHeader<T extends string>({
         </span>
       )}
 
+      {!start && (
       <Dropdown
         className="app-header-scenario"
         style={{ width: homeOf ? 200 : 170 }}
@@ -223,6 +230,7 @@ export function AppHeader<T extends string>({
                 : onScenarioChange(id)
         }
       />
+      )}
 
       {active?.dirty && <Tag tone="outline">results stale</Tag>}
       {trailing}
@@ -244,12 +252,12 @@ export function AppHeader<T extends string>({
 
       {guest ? (
         <>
-          <Button onClick={guest.onSignUp}>
+          <Button className="app-header-signup" onClick={guest.onSignUp}>
             Sign up
           </Button>
           <button
             type="button"
-            className="linkbtn"
+            className="linkbtn app-header-signin"
             style={{ whiteSpace: "nowrap" }}
             onClick={guest.onSignIn}
           >

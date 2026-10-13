@@ -29,4 +29,13 @@ export type SetupPlan = {
    * it follows. Absent, retirement spending is the fixed expense.
    */
   retirement_spending_rule?: SpendingRuleSpec;
+  /**
+   * High-yield savings, money market funds and CDs, kept apart from
+   * checking as cash the funding policy spends before selling holdings.
+   */
+  high_yield_savings?: number;
+  /**
+   * What that cash earns. Absent, it earns the cash profile.
+   */
+  savings_profile_id?: number;
 };

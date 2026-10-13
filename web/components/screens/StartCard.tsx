@@ -55,13 +55,23 @@ const noHover = () => {};
  */
 export function StartCard({
   onCreate,
+  onExample,
+  exampleBusy,
+  exampleError,
   onImport,
   local,
+  account,
 }: {
   onCreate: () => void;
+  /** Makes the example household's plan and opens it running. */
+  onExample: () => void;
+  exampleBusy?: boolean;
+  exampleError?: string;
   /** Local mode only: a backup file can be imported instead. */
   onImport: () => void;
   local: boolean;
+  /** A guest's way to an account; shown here on a phone, whose header has no room. */
+  account?: { onSignUp: () => void; onSignIn: () => void };
 }) {
   const scale = useIsMobile() ? PHONE_SCALE : SCALE;
   return (
@@ -82,8 +92,38 @@ export function StartCard({
           <Button variant="primary" onClick={onCreate}>
             Create a scenario
           </Button>
-          {local && <Button variant="ghost" onClick={onImport}>Import a backup file</Button>}
+          <Button onClick={onExample} disabled={exampleBusy}>
+            {exampleBusy ? "Opening the example…" : "See an example plan"}
+          </Button>
         </div>
+        {exampleError && (
+          <p role="alert" className="start-quiet">
+            {exampleError}
+          </p>
+        )}
+        <p className="start-quiet start-more">
+          The example is an invented household you can edit freely.
+          {local && (
+            <>
+              {" "}
+              <button type="button" className="linkbtn" onClick={onImport}>
+                Import a backup file
+              </button>
+            </>
+          )}
+        </p>
+        {account && (
+          <p className="start-quiet start-account">
+            <button type="button" className="linkbtn" onClick={account.onSignIn}>
+              Sign in
+            </button>{" "}
+            or{" "}
+            <button type="button" className="linkbtn" onClick={account.onSignUp}>
+              create a free account
+            </button>{" "}
+            to keep plans in the cloud.
+          </p>
+        )}
       </div>
 
       <figure className="start-sample" aria-label="An illustration of a plan's results">

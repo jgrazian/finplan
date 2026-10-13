@@ -111,6 +111,7 @@ async fn create(
     let has_investments = setup::has_investments(&p, annual_401k_contribution);
     for (table, id) in [
         ("return_profiles", Some(p.cash_profile_id)),
+        ("return_profiles", p.savings_profile()),
         (
             "return_profiles",
             has_investments.then_some(p.stock_profile_id),
