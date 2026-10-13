@@ -1,6 +1,15 @@
 "use client";
 
-import { ChartCanvas, FanSeries, Legend, domainFor, makeScale } from "@/components/charts";
+import { useMemo } from "react";
+import {
+  ChartCanvas,
+  DEFAULT_GEOMETRY,
+  FanSeries,
+  Legend,
+  domainFor,
+  makeScale,
+  useChartGeometry,
+} from "@/components/charts";
 import { PHONE_GEOMETRY } from "@/components/results/NetWorthChart";
 import { AI_MARK } from "@/components/scenario/DescribePitch";
 import { Button } from "@/components/ui";
@@ -44,10 +53,8 @@ const SAMPLE: NetWorthBands = {
   upperQuartile: path(0.0535),
   high: path(0.0656),
 };
-// Scaled to the inner band, as Results scales its fan, in its desktop and phone frames.
+// Scaled to the inner band, as Results scales its fan.
 const DOMAIN = domainFor("linear", [SAMPLE.lowerQuartile, SAMPLE.p50, SAMPLE.upperQuartile]);
-const SCALE = makeScale(ages.length, DOMAIN);
-const PHONE_SCALE = makeScale(ages.length, DOMAIN, { geo: PHONE_GEOMETRY });
 const noHover = () => {};
 
 /**
@@ -77,7 +84,8 @@ export function StartCard({
   /** The server has AI: offer AI-assisted setup as what an account adds. */
   ai?: boolean;
 }) {
-  const scale = useIsMobile() ? PHONE_SCALE : SCALE;
+  const [measure, geo] = useChartGeometry(useIsMobile() ? PHONE_GEOMETRY : DEFAULT_GEOMETRY);
+  const scale = useMemo(() => makeScale(ages.length, DOMAIN, { geo }), [geo]);
   return (
     <section className="start-card" aria-labelledby="start-title">
       <div className="start-copy">
@@ -150,7 +158,7 @@ export function StartCard({
           <strong>Net worth, by age</strong>
           <span>Illustration, not your numbers</span>
         </figcaption>
-        <ChartCanvas scale={scale} years={ages} format={fmtAxis} hoverIndex={null} onHoverChange={noHover}>
+        <ChartCanvas measureRef={measure} scale={scale} years={ages} format={fmtAxis} hoverIndex={null} onHoverChange={noHover}>
           <FanSeries bands={SAMPLE} scale={scale} />
         </ChartCanvas>
         <Legend

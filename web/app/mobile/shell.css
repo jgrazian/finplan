@@ -8,15 +8,27 @@
   padding: 24px;
 }
 
+/* The sheet's widest. 1440px up to a window of about 1680px, then it keeps
+   growing with the window, 120px clear each side, so a 1440p or 4K screen
+   is not left with a narrow column; it stops at 2400px. The footer follows. */
+:root {
+  --shell-max: clamp(1440px, 100vw - 240px, 2400px);
+  /* How far the sheet has grown past 1440px, and the share of that a side
+     column (a rail, a list beside its detail) takes: an eighth, so rails
+     widen with the screen without taking the room the main pane grew for. */
+  --sheet-grow: clamp(0px, 100vw - 1680px, 960px);
+  --rail-grow: calc(var(--sheet-grow) / 8);
+}
+
 .app-shell {
   width: 100%;
-  max-width: 1440px;
+  max-width: var(--shell-max);
   margin: 0 auto;
 }
 
 .split-pane {
   display: grid;
-  grid-template-columns: 1fr var(--rail-width, 296px);
+  grid-template-columns: 1fr calc(var(--rail-width, 296px) + var(--rail-grow));
   align-items: stretch;
 }
 

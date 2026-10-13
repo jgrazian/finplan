@@ -4,7 +4,7 @@
 
 .plan-body {
   display: grid;
-  grid-template-columns: 300px 1fr;
+  grid-template-columns: calc(300px + var(--rail-grow)) 1fr;
   align-items: stretch;
   min-height: 460px;
 }

@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { ChartCanvas, makeScale } from "@/components/charts";
+import { ChartCanvas, makeScale, useChartGeometry } from "@/components/charts";
 import type { ChartGeometry, Scale } from "@/components/charts/geometry";
 import { fmtAxis, fmtCompact } from "@/lib/format";
 import { useIsMobile } from "@/lib/hooks/useIsMobile";
@@ -66,14 +66,15 @@ export function SpendingRulesChart({
   const mobile = useIsMobile();
   const [hover, setHover] = useState<number | null>(null);
   const [pinned, setPinned] = useState<number | null>(null);
+  const [measure, geo] = useChartGeometry(mobile ? PHONE_GEOMETRY : GEOMETRY);
   const scale = useMemo(
     () =>
       // The axis takes in the selected band whole, so its upper tail is never cut flat.
       makeScale(chart.years.length, { min: 0, max: ruleChartMax(chart, selected) * 1.05 }, {
         mode: "point",
-        geo: mobile ? PHONE_GEOMETRY : GEOMETRY,
+        geo,
       }),
-    [chart, mobile, selected],
+    [chart, geo, selected],
   );
 
   if (chart.years.length === 0) return null;
@@ -95,6 +96,7 @@ export function SpendingRulesChart({
       </div>
 
       <ChartCanvas
+        measureRef={measure}
         scale={scale}
         years={chart.years}
         format={fmtAxis}

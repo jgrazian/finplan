@@ -40,12 +40,12 @@
 
 /* 1a: questions on the left, the plan so far on the right. */
 .ns-body-guided {
-  grid-template-columns: 520px minmax(0, 1fr);
+  grid-template-columns: calc(520px + var(--rail-grow)) minmax(0, 1fr);
 }
 
 /* 2a: the conversation takes the room, the draft is a fixed rail. */
 .ns-body-describe {
-  grid-template-columns: minmax(0, 1fr) 460px;
+  grid-template-columns: minmax(0, 1fr) calc(460px + var(--rail-grow));
 }
 
 .ns-col {

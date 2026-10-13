@@ -2,7 +2,7 @@
 
 import type { ReactNode } from "react";
 import { Blueprint } from "@/components/ui";
-import { FAN, type FanView } from "@/lib/view/whatIf";
+import type { FanView } from "@/lib/view/whatIf";
 
 const TICK = {
   fontSize: 10.5,
@@ -15,7 +15,7 @@ const MUTED = "color-mix(in srgb, var(--color-text) 60%, transparent)";
 
 /** Net worth in today's dollars: the plan ghosted, the what-if over it. */
 export function WhatIfFan({ view, byAge }: { view: FanView; byAge: boolean }) {
-  const G = FAN;
+  const G = view.geo;
   return (
     <div>
       <Blueprint style={{ padding: "6px 8px" }}>

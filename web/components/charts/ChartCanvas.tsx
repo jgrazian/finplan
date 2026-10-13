@@ -1,6 +1,6 @@
 "use client";
 
-import type { ReactNode } from "react";
+import type { ReactNode, Ref } from "react";
 import { Blueprint } from "@/components/ui";
 import {
   DEFAULT_GEOMETRY,
@@ -34,6 +34,7 @@ export function ChartCanvas({
   pinnedIndex,
   onSelect,
   zeroLabel = "Zero balance",
+  measureRef,
   children,
 }: {
   scale: Scale;
@@ -48,6 +49,8 @@ export function ChartCanvas({
   onSelect?: (index: number) => void;
   /** What the zero line means, when the domain crosses it. */
   zeroLabel?: string;
+  /** The `<svg>`, for `useChartGeometry` to measure. */
+  measureRef?: Ref<SVGSVGElement>;
   children: ReactNode;
 }) {
   const geo = scale.geo ?? DEFAULT_GEOMETRY;
@@ -59,6 +62,7 @@ export function ChartCanvas({
   return (
     <Blueprint style={{ position: "relative", padding: "10px 12px 4px" }}>
       <svg
+        ref={measureRef}
         viewBox={`0 0 ${geo.w} ${geo.h}`}
         style={{
           width: "100%",

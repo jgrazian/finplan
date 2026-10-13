@@ -59,7 +59,7 @@ export function AccountScreen({
   const active = SECTIONS.find((s) => s.id === nav.section) ?? SECTIONS[0];
 
   return (
-    <div className="mobile-stack" style={{ display: "grid", gridTemplateColumns: "250px 1fr", alignItems: "stretch" }}>
+    <div className="mobile-stack" style={{ display: "grid", gridTemplateColumns: "calc(250px + var(--rail-grow)) 1fr", alignItems: "stretch" }}>
       <div className="account-sections" style={{ borderRight: "1px solid var(--color-divider)", padding: "14px 0" }}>
         <h6 style={{ margin: "0 0 8px", padding: "0 16px" }}>Account</h6>
         {/* Buttons rather than rows with a click handler: this is navigation,

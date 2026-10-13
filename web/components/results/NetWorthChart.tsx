@@ -3,6 +3,7 @@
 import { useMemo } from "react";
 import {
   ChartCanvas,
+  DEFAULT_GEOMETRY,
   EventMarkers,
   FanSeries,
   type ScaleKind,
@@ -10,6 +11,7 @@ import {
   StackedSeries,
   domainFor,
   makeScale,
+  useChartGeometry,
 } from "@/components/charts";
 import { fmtAxis } from "@/lib/format";
 import { type ChartGeometry, linePath } from "@/components/charts/geometry";
@@ -90,14 +92,15 @@ export function NetWorthChart({
     [view, stack, bands, pathValues],
   );
 
+  const [measure, geo] = useChartGeometry(mobile ? PHONE_GEOMETRY : DEFAULT_GEOMETRY);
   const scale = useMemo(() => {
     const { kind } = resolveScaleKind(scaleKind, view);
     return makeScale(bands.years.length, domainFor(kind, plotted), {
       mode: view === "bar" ? "band" : "point",
       kind,
-      geo: mobile ? PHONE_GEOMETRY : undefined,
+      geo,
     });
-  }, [bands.years.length, plotted, scaleKind, view, mobile]);
+  }, [bands.years.length, plotted, scaleKind, view, geo]);
 
   const index = focus.index;
   const cursorValue = pathValues[index] ?? 0;
@@ -105,6 +108,7 @@ export function NetWorthChart({
   return (
     <>
       <ChartCanvas
+        measureRef={measure}
         scale={scale}
         years={bands.years}
         format={fmtAxis}

@@ -3,6 +3,7 @@
 import { useId, type KeyboardEvent } from "react";
 import { ChartCanvas, EventMarkers } from "@/components/charts";
 import { makeScale, barColumn, type ChartGeometry } from "@/components/charts/geometry";
+import { useChartGeometry } from "@/components/charts/useChartGeometry";
 import {
   CONVERSION_COLOR,
   CONVERSION_TAX_STRIPES,
@@ -13,6 +14,9 @@ import {
 } from "@/lib/view/drawdown";
 
 const MUTED = "color-mix(in srgb, var(--color-text) 60%, transparent)";
+
+const NARROW: ChartGeometry = { w: 560, h: 340, left: 52, right: 8, top: 8, bottom: 28 };
+const WIDE: ChartGeometry = { w: 920, h: 380, left: 60, right: 12, top: 8, bottom: 28 };
 
 /**
  * The stacked bars of Drawdown: one column per year, sources bottom-up, a
@@ -41,9 +45,7 @@ export function DrawdownChart({
   const hatch = `dd-hatch-${id}`;
   const stripes = `dd-tax-${id}`;
   const bands = `dd-conversion-tax-${id}`;
-  const geo: ChartGeometry = narrow
-    ? { w: 560, h: 340, left: 52, right: 8, top: 8, bottom: 28 }
-    : { w: 920, h: 380, left: 60, right: 12, top: 8, bottom: 28 };
+  const [measure, geo] = useChartGeometry(narrow ? NARROW : WIDE);
   const count = view.columns.length;
   const scale = makeScale(
     count,
@@ -77,6 +79,7 @@ export function DrawdownChart({
       style={{ outlineOffset: 2 }}
     >
       <ChartCanvas
+        measureRef={measure}
         scale={scale}
         years={view.years}
         format={axisLabel(view.unit)}

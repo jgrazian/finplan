@@ -1,7 +1,14 @@
 "use client";
 
 import { useMemo } from "react";
-import { ChartCanvas, FanSeries, domainFor, makeScale } from "@/components/charts";
+import {
+  ChartCanvas,
+  DEFAULT_GEOMETRY,
+  FanSeries,
+  domainFor,
+  makeScale,
+  useChartGeometry,
+} from "@/components/charts";
 import { type ChartGeometry, linePath } from "@/components/charts/geometry";
 import { InlineStat } from "@/components/ui";
 import { fmtAxis, fmtCompact } from "@/lib/format";
@@ -52,14 +59,15 @@ export function SpendingCard({
   // Scaled to the inner band and the median, as the net-worth envelope is:
   // the upper tail of spending under a rule that raises in good markets is
   // long enough to press everything else flat.
+  const [measure, geo] = useChartGeometry(mobile ? PHONE_GEOMETRY : DEFAULT_GEOMETRY);
   const scale = useMemo(
     () =>
       makeScale(
         bands.years.length,
         domainFor("linear", [bands.lowerQuartile, bands.upperQuartile, bands.p50, [0]]),
-        { mode: "point", kind: "linear", geo: mobile ? PHONE_GEOMETRY : undefined },
+        { mode: "point", kind: "linear", geo },
       ),
-    [bands, mobile],
+    [bands, geo],
   );
 
   if (bands.years.length === 0) return null;
@@ -95,6 +103,7 @@ export function SpendingCard({
       </div>
 
       <ChartCanvas
+        measureRef={measure}
         scale={scale}
         years={bands.years}
         format={fmtAxis}

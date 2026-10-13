@@ -1,7 +1,7 @@
 "use client";
 
 import { Blueprint } from "@/components/ui";
-import { WATERFALL, type BarTone, type WaterfallView } from "@/lib/view/whatIf";
+import type { BarTone, WaterfallView } from "@/lib/view/whatIf";
 
 const TICK = {
   fontSize: 10.5,
@@ -24,7 +24,7 @@ const FILL: Record<BarTone, { fill: string; opacity: number }> = {
 
 /** Where the success went: one bar per override, each on top of the ones before. */
 export function SuccessWaterfall({ view }: { view: WaterfallView }) {
-  const G = WATERFALL;
+  const G = view.geo;
   return (
     <Blueprint style={{ padding: "6px 8px" }}>
       <svg

@@ -510,7 +510,17 @@ export function whatIfStats(outcome: WhatIfOutcome): WhatIfStats {
 
 // ──────────────────────────── the waterfall ────────────────────────────
 
-export const WATERFALL = { w: 760, h: 210, left: 44, right: 12, top: 22, bottom: 40 } as const;
+/** A What-If drawing's frame; `w` grows on a wide screen (useChartGeometry). */
+export interface WhatIfGeometry {
+  w: number;
+  h: number;
+  left: number;
+  right: number;
+  top: number;
+  bottom: number;
+}
+
+export const WATERFALL: WhatIfGeometry = { w: 760, h: 210, left: 44, right: 12, top: 22, bottom: 40 };
 
 export type BarTone = "plan" | "gain" | "loss" | "flat" | "total";
 
@@ -534,6 +544,8 @@ export interface WaterfallBar {
 }
 
 export interface WaterfallView {
+  /** The frame the bars were laid out in. */
+  geo: WhatIfGeometry;
   bars: WaterfallBar[];
   grid: Array<{ y: number; label: string }>;
   /** The plot's floor, where the two total bars stand. */
@@ -552,8 +564,8 @@ export function waterfallView(
   outcome: WhatIfOutcome,
   names: string[],
   titles: string[] = names,
+  G: WhatIfGeometry = WATERFALL,
 ): WaterfallView {
-  const G = WATERFALL;
   const rates = outcome.steps.map((s) => s.point.success_rate * 100);
   const lo0 = Math.min(...rates);
   const hi0 = Math.max(...rates);
@@ -641,14 +653,16 @@ export function waterfallView(
   const grid: Array<{ y: number; label: string }> = [];
   const stepPct = hi - lo > 40 ? 20 : hi - lo > 20 ? 10 : 5;
   for (let v = lo; v <= hi + 1e-9; v += stepPct) grid.push({ y: y(v), label: `${v}%` });
-  return { bars, grid, base };
+  return { geo: G, bars, grid, base };
 }
 
 // ──────────────────────────── the fan ────────────────────────────
 
-export const FAN = { w: 760, h: 220, left: 52, right: 12, top: 10, bottom: 24 } as const;
+export const FAN: WhatIfGeometry = { w: 760, h: 220, left: 52, right: 12, top: 10, bottom: 24 };
 
 export interface FanView {
+  /** The frame the paths were drawn in. */
+  geo: WhatIfGeometry;
   /** P25–P75, pointwise across iterations. */
   planBand: string;
   /** P50, pointwise across iterations: the centreline. */
@@ -670,11 +684,10 @@ const f1 = (n: number) => n.toFixed(1);
  * Plan ghosted behind the what-if, today's dollars: the P25–P75 band around a
  * P50 centreline, both pointwise across iterations.
  */
-export function fanView(outcome: WhatIfOutcome): FanView | null {
+export function fanView(outcome: WhatIfOutcome, G: WhatIfGeometry = FAN): FanView | null {
   const axis = outcome.ages ?? outcome.years;
   const n = axis.length;
   if (n < 2) return null;
-  const G = FAN;
   const x0 = axis[0];
   const x1 = axis[n - 1];
   const spanX = x1 - x0 || 1;
@@ -716,6 +729,7 @@ export function fanView(outcome: WhatIfOutcome): FanView | null {
     age == null || outcome.ages == null || age < x0 || age > x1 ? null : x(age);
 
   return {
+    geo: G,
     planBand: plan.band,
     planMedian: plan.median,
     whatIfBand: whatIf.band,

@@ -16,8 +16,11 @@ import { useIsMobile } from "@/lib/hooks/useIsMobile";
 import { useSubmit } from "@/lib/hooks/useSubmit";
 import { useWhatIfStack } from "@/lib/hooks/useWhatIf";
 import { planAxis } from "@/lib/view/axis";
+import { useChartGeometry } from "@/components/charts";
 import {
+  FAN,
   MAX_RUN_LAYERS,
+  WATERFALL,
   addOptions,
   applyLines,
   changedSummary,
@@ -33,6 +36,7 @@ import {
   whatIfStats,
   type AddOption,
   type WhatIfContext,
+  type WhatIfGeometry,
 } from "@/lib/view/whatIf";
 import { OverrideCard } from "./OverrideCard";
 import { SuccessWaterfall } from "./SuccessWaterfall";
@@ -52,6 +56,9 @@ const RUN_SETTLE_MS = 200;
  */
 const QUICK_ITERATIONS = 200;
 const REFINED_ITERATIONS = 2_000;
+
+/** The most the What-If charts scale up before they widen instead (useChartGeometry). */
+const WHAT_IF_MAX_SCALE = 1.4;
 
 type Pass = "quick" | "refined";
 
@@ -287,6 +294,10 @@ export function WhatIfPanel({
   };
 
   // ── drawing ──────────────────────────────────────────────────────────
+  // Both charts fill this column. They already draw at about 1.35x on the
+  // widest screen the sheet used to stop at; past that they widen instead.
+  const [chartsRef, waterfallGeo] = useChartGeometry<WhatIfGeometry, HTMLDivElement>(WATERFALL, WHAT_IF_MAX_SCALE);
+  const fanGeo = useMemo(() => ({ ...FAN, w: waterfallGeo.w }), [waterfallGeo.w]);
   const stats = outcome ? whatIfStats(outcome) : undefined;
   const waterfall = useMemo(() => {
     if (!shown || !entries) return undefined;
@@ -296,9 +307,9 @@ export function WhatIfPanel({
       const v = views.get(id);
       return v ? v.parts.map((p) => (p.type === "text" ? p.text : p.value)).join(" ") : "removed";
     });
-    return waterfallView(shown.outcome, names, titles);
-  }, [shown, entries, ctx]);
-  const fan = useMemo(() => (outcome ? fanView(outcome) : null), [outcome]);
+    return waterfallView(shown.outcome, names, titles, waterfallGeo);
+  }, [shown, entries, ctx, waterfallGeo]);
+  const fan = useMemo(() => (outcome ? fanView(outcome, fanGeo) : null), [outcome, fanGeo]);
 
   // On a phone the page-level actions leave the status row for a sticky bar
   // above the tab bar, where a thumb reaches them.
@@ -381,7 +392,7 @@ export function WhatIfPanel({
 
       <div
         className="mobile-stack"
-        style={{ display: "grid", gridTemplateColumns: "380px minmax(0, 1fr)" }}
+        style={{ display: "grid", gridTemplateColumns: "calc(380px + var(--rail-grow)) minmax(0, 1fr)" }}
       >
         <aside
           className="wi-aside"
@@ -466,6 +477,7 @@ export function WhatIfPanel({
             )
           ) : (
             <div
+              ref={chartsRef}
               style={{
                 display: "flex",
                 flexDirection: "column",

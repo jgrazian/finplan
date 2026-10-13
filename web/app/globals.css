@@ -299,7 +299,7 @@ body {
   gap: 24px 40px;
   align-items: center;
   width: 100%;
-  max-width: 1440px;
+  max-width: var(--shell-max);
   margin: 28px auto 0;
   padding: 20px 0 4px;
   border-top: 1px solid var(--color-divider);
@@ -2326,7 +2326,7 @@ tr:hover > * > .grip,
 
 .review-notes {
   display: grid;
-  grid-template-columns: minmax(300px, 420px) minmax(0, 1fr);
+  grid-template-columns: minmax(300px, calc(420px + var(--rail-grow))) minmax(0, 1fr);
   min-height: 560px;
 }
 
