@@ -47,7 +47,7 @@ const steps = [
   {
     short: "Details",
     title: "Start with the plan details",
-    lead: "Name the plan and set its dates. Continue through the questions, or switch to Blank to start empty with these details.",
+    lead: "Your birth date and how far ahead to plan. Answer the questions in order or jump between them with the steps above, or switch to Blank to start empty with these details.",
   },
   {
     short: "Cash",
@@ -82,7 +82,7 @@ const steps = [
   {
     short: "Review",
     title: "Review your starter plan",
-    lead: "Everything on the right is created together as ordinary, editable accounts, events and parameters.",
+    lead: "Everything on the right is created together as ordinary, editable accounts, events and parameters, and the plan runs as soon as it is created.",
   },
 ] as const;
 
@@ -110,6 +110,15 @@ type SetupDraft = SetupPlan & {
   /** Fixed, or a rule that adjusts it with the market (spec 22). */
   retirement_spending_choice: SpendingChoice;
 };
+
+/** What a plan is called until it is renamed: unique, since names are per account. */
+function freshName(taken: readonly string[]): string {
+  const names = new Set(taken.map((name) => name.trim().toLowerCase()));
+  for (let n = 1; ; n++) {
+    const name = n === 1 ? "My plan" : `My plan ${n}`;
+    if (!names.has(name.toLowerCase())) return name;
+  }
+}
 
 /** What the setup suggests for retirement spending. */
 const SUGGESTED_CHOICE: SpendingChoice = "Guardrails";
@@ -246,7 +255,10 @@ interface NewScenarioProps {
   home: PlanHome;
   /** Offered only when there is a choice, i.e. local mode is on. */
   onHomeChange?: (home: PlanHome) => void;
+  /** The names already used, which a new plan's default name avoids. */
+  takenNames?: readonly string[];
   onClose: () => void;
+  /** Guided setup opens the plan on Results, where it is run at once; Blank opens it on Plan. */
   onCreated: (s: Scenario, nextTab: "plan" | "results") => void;
   /** A draft is opened on Review; it stays a draft until Create & run. */
   onReviewDraft?: (draft: Scenario) => void;
@@ -426,7 +438,8 @@ function GuidedSetup(
     const profileIds = defaultReturnProfileIds(props.returnProfiles ?? []);
     const empty: SetupDraft = {
       request_id: crypto.randomUUID(),
-      name: "",
+      // Asked for last, once the plan is worth keeping.
+      name: freshName(props.takenNames ?? []),
       start_date: new Date().toISOString().slice(0, 10),
       birth_date: props.defaults.birth_date ?? "",
       duration_years: props.defaults.default_duration_years,
@@ -466,6 +479,7 @@ function GuidedSetup(
       return {
         ...empty,
         ...saved,
+        name: saved.name?.trim() ? saved.name : empty.name,
         retirement_401k: saved.retirement_401k ?? 0,
         retirement_401k_contribution_percent:
           saved.retirement_401k_contribution_percent ?? 0,
@@ -596,9 +610,16 @@ function GuidedSetup(
       ? addYears(draft.start_date, draft.duration_years)
       : null;
 
+  // Blank names the plan on its one page; Guided at the end.
+  const nameStep = blank ? 0 : steps.length - 1;
+  const takenName = (props.takenNames ?? []).find(
+    (name) => name.trim().toLowerCase() === draft.name.trim().toLowerCase(),
+  );
   const stepProblem = (index: number): string | undefined => {
-    if (index === 0 && (!draft.name.trim() || !draft.birth_date || !end))
-      return "Enter a name, birth date, and valid plan length.";
+    if (index === nameStep && !draft.name.trim()) return "Name the plan.";
+    if (index === nameStep && takenName) return `You already have a plan named ${takenName}.`;
+    if (index === 0 && (!draft.birth_date || !end))
+      return "Enter a birth date and a valid plan length.";
     if (index === 0 && draft.birth_date > draft.start_date)
       return "Birth date must be on or before the plan start date.";
     if (index === 1 && draft.has_cash == null) return "Choose Yes or No to continue.";
@@ -632,7 +653,7 @@ function GuidedSetup(
     setStepError(undefined);
     setStep(step + 1);
   };
-  const back = (to: number) => {
+  const go = (to: number) => {
     setStepError(undefined);
     setStep(to);
   };
@@ -656,9 +677,12 @@ function GuidedSetup(
     }, props.onClose);
   };
   const finish = () => {
-    const problem = stepProblem(0) ?? stepProblem(5) ?? stepProblem(6);
-    if (problem) {
-      setStepError(problem);
+    // Steps can be skipped from the strip, so every one is checked here, and
+    // the first with something missing is opened with the problem on it.
+    const unfinished = steps.findIndex((_, index) => stepProblem(index) != null);
+    if (unfinished >= 0) {
+      setStep(unfinished);
+      setStepError(stepProblem(unfinished));
       return;
     }
     if (!draft.assumptions_confirmed) {
@@ -923,10 +947,10 @@ function GuidedSetup(
                     key={entry.short}
                     type="button"
                     className={`ns-step ${state}`}
-                    disabled={state !== "done"}
+                    disabled={state === "on"}
                     aria-current={state === "on" ? "step" : undefined}
-                    title={state === "done" ? `Back to ${entry.short}` : undefined}
-                    onClick={() => back(index)}
+                    title={state === "on" ? undefined : `Go to ${entry.short}`}
+                    onClick={() => go(index)}
                   >
                     <div className="stat-l">{index + 1}</div>
                     <div className="ns-step-name">{entry.short}</div>
@@ -947,16 +971,19 @@ function GuidedSetup(
                 </p>
               </div>
 
+              {step === nameStep && (
+                <Field label="Plan name">
+                  <Input
+                    aria-label="Plan name"
+                    required
+                    value={draft.name}
+                    onChange={(event) => patch({ name: event.target.value })}
+                  />
+                </Field>
+              )}
+
               {step === 0 && (
                 <>
-                  <Field label="Plan name">
-                    <Input
-                      aria-label="Plan name"
-                      required
-                      value={draft.name}
-                      onChange={(event) => patch({ name: event.target.value })}
-                    />
-                  </Field>
                   <DialogRow>
                     <Field label="Birth date">
                       <DateInput
@@ -1234,7 +1261,7 @@ function GuidedSetup(
               {step === 7 && (
                 <>
                   <p>
-                    <strong>{draft.name}</strong> · {draft.start_date} to {end} · retire at {draft.retirement_age}
+                    {draft.start_date} to {end} · retire at {draft.retirement_age}
                   </p>
                   <p>
                     Checking and savings ${cash.toLocaleString()} + 401(k) ${retirement401k.toLocaleString()}
@@ -1300,7 +1327,7 @@ function GuidedSetup(
               </span>
             )}
             <div className="ns-foot-end">
-              {step > 0 && <Button onClick={() => back(step - 1)}>Back</Button>}
+              {step > 0 && <Button onClick={() => go(step - 1)}>Back</Button>}
               <Button type="submit" variant="primary" disabled={submit.busy}>
                 {submit.busy
                   ? "…"
@@ -1308,7 +1335,7 @@ function GuidedSetup(
                     ? "Create blank scenario"
                     : step < steps.length - 1
                       ? "Continue"
-                      : "Create plan"}
+                      : "Create and run plan"}
               </Button>
             </div>
           </div>

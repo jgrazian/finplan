@@ -44,6 +44,7 @@ export function AppHeader<T extends string>({
   tabs,
   activeTab,
   onTabChange,
+  tabsDisabled,
   scenarios,
   activeScenarioId,
   onScenarioChange,
@@ -53,6 +54,7 @@ export function AppHeader<T extends string>({
   accountOpen,
   guest,
   onRun,
+  runBlocked,
   run,
   running,
   onCancel,
@@ -68,6 +70,11 @@ export function AppHeader<T extends string>({
   /** Absent while a page that is not a tab (New scenario) is on screen. */
   activeTab?: T;
   onTabChange: (id: T) => void;
+  /**
+   * Why the tabs cannot be opened yet (there is no plan for them to show), said
+   * on hover. Set, every tab is greyed out and none reads as current.
+   */
+  tabsDisabled?: string;
   scenarios: Scenario[];
   activeScenarioId: string;
   onScenarioChange: (id: string) => void;
@@ -84,6 +91,11 @@ export function AppHeader<T extends string>({
   /** Account settings is what is on screen, so the avatar reads as current. */
   accountOpen?: boolean;
   onRun?: () => void;
+  /**
+   * Why Run has nothing to do yet, e.g. no scenario exists. Run is then shown
+   * disabled and unfilled, so it does not outshout the button that would fix it.
+   */
+  runBlocked?: string;
   /** The scenario's latest run, read for its progress while `running`. */
   run?: Run;
   /** A run is queued or executing: Run gives its slot to the progress. */
@@ -173,7 +185,9 @@ export function AppHeader<T extends string>({
             key={tab.id}
             type="button"
             className="tab-inline"
-            aria-current={tab.id === activeTab ? "page" : undefined}
+            aria-current={!tabsDisabled && tab.id === activeTab ? "page" : undefined}
+            disabled={tabsDisabled != null}
+            title={tabsDisabled}
             onClick={() => onTabChange(tab.id)}
           >
             {tab.label}
@@ -218,11 +232,11 @@ export function AppHeader<T extends string>({
       ) : (
         <Button
           className="app-header-run"
-          variant="primary"
-          shortcut="r"
+          variant={runBlocked ? "secondary" : "primary"}
+          shortcut={runBlocked ? undefined : "r"}
           onClick={onRun}
-          disabled={offline}
-          title={offline ? "No connection to the server." : undefined}
+          disabled={offline || runBlocked != null}
+          title={offline ? "No connection to the server." : runBlocked}
         >
           Run
         </Button>
@@ -230,7 +244,7 @@ export function AppHeader<T extends string>({
 
       {guest ? (
         <>
-          <Button variant="primary" onClick={guest.onSignUp}>
+          <Button onClick={guest.onSignUp}>
             Sign up
           </Button>
           <button
@@ -267,7 +281,9 @@ export function AppHeader<T extends string>({
         <button
           key={tab.id}
           type="button"
-          aria-current={tab.id === activeTab ? "page" : undefined}
+          aria-current={!tabsDisabled && tab.id === activeTab ? "page" : undefined}
+          disabled={tabsDisabled != null}
+          title={tabsDisabled}
           onClick={() => onTabChange(tab.id)}
         >
           {tab.label}
@@ -280,8 +296,8 @@ export function AppHeader<T extends string>({
 
 /**
  * Run's slot while a run is in flight: status and count over a thin fill,
- * with Cancel at the end. It holds Run's width, so the header never reflows
- * when a run starts or ends, and it shows from every tab.
+ * with Cancel at the end. It shows from every tab. It is wider than Run, which
+ * is sized to its label, so the controls left of it step aside while it runs.
  */
 function RunProgress({
   run,

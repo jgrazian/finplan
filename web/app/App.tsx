@@ -13,6 +13,7 @@ import { nearestStop, type RunEffort } from "@/components/results";
 import { clampEffort } from "@/lib/view/effort";
 import {
   EmptyState,
+  StartCard,
   PlanScreen,
   PortfolioScreen,
   ResultsScreen,
@@ -20,7 +21,7 @@ import {
 import { ReviewScreen } from "@/components/review";
 import { NewScenarioScreen } from "@/components/scenario/NewScenarioScreen";
 import { SessionExpiredDialog, StatusBar } from "@/components/status";
-import { Button, Tag } from "@/components/ui";
+import { Tag } from "@/components/ui";
 import { historyApi } from "@/lib/api/history";
 import type { Scenario as ApiScenario, PreflightIssue, UserResponse } from "@/lib/api/types";
 import { useAsync } from "@/lib/hooks/useAsync";
@@ -281,6 +282,8 @@ function Workbench({
     : ((draft != null && nav.scenario === draft.slug ? draft : undefined) ??
       resolveScenario(list, nav.scenario));
   const isDraft = selectedScenario?.status === "draft";
+  // Nothing to show on any tab yet: the first visit, or every plan deleted.
+  const noPlans = scenarios.data != null && list.length === 0 && !homeDown;
   const scenarioId = selectedScenario?.id;
   const scenarioSlug = selectedScenario?.slug;
   // What the open plan's home can do: AI features need a stored cloud plan,
@@ -501,10 +504,27 @@ function Workbench({
 
   const start = useCallback(() => {
     // A draft has nothing to run until Create & run makes it a plan.
-    if (isDraft) return;
+    if (isDraft || scenarioId == null) return;
     nav.setTab("results");
     void requestRun(effort);
-  }, [nav, requestRun, effort, isDraft]);
+  }, [nav, requestRun, effort, isDraft, scenarioId]);
+
+  // Guided setup ends on Results, so it runs the plan it made rather than
+  // leaving an empty chart and a Run button to find. The run waits for the
+  // workspace to have loaded the new plan, which is what `run.start` reads.
+  const runWhenOpen = useRef<string>(undefined);
+  const workspaceId = workspace.scenario?.id;
+  useEffect(() => {
+    if (runWhenOpen.current == null || runWhenOpen.current !== scenarioSlug) return;
+    if (scenarioId == null || workspaceId !== scenarioId) return;
+    // Off the effect, as the auto re-run does; a re-render before it fires
+    // reschedules it with the newer `requestRun`.
+    const timer = setTimeout(() => {
+      runWhenOpen.current = undefined;
+      void requestRun(effort);
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [scenarioSlug, scenarioId, workspaceId, requestRun, effort]);
 
   // The offload shares the header's progress bar with local runs.
   const offloadRun =
@@ -686,6 +706,8 @@ function Workbench({
         <AppHeader
           tabs={TABS}
           activeTab={creating ? undefined : tab}
+          // Account settings stays a way back to the start card.
+          tabsDisabled={noPlans && tab !== "account" ? "Create a scenario first" : undefined}
           onTabChange={(tab) => {
             // New scenario is a page, not a tab: any tab leaves it.
             setCreating(false);
@@ -713,6 +735,7 @@ function Workbench({
             setCreating(false);
             start();
           }}
+          runBlocked={noPlans ? "Create a scenario first" : undefined}
           run={offloadRun ?? run.run}
           running={run.active || offload.active}
           onCancel={offload.active ? offload.cancel : run.cancel}
@@ -803,9 +826,11 @@ function Workbench({
               // A draft started here spent one of the month's drafts.
               access.reload();
             }}
+            takenNames={list.map((row) => row.name)}
             onCreated={(created, nextTab) => {
               setRecentlyCreated(created);
               nav.openScenario(created.slug, nextTab);
+              if (nextTab === "results") runWhenOpen.current = created.slug;
               scenarios.reload();
             }}
             onDraftCreated={(created) => {
@@ -857,7 +882,7 @@ function Workbench({
             {localMode && storeCleared && (
               <StoreClearedNotice onImport={() => setHomeRequest({ kind: "files" })} />
             )}
-            <NoScenarios
+            <StartCard
               local={localMode}
               onCreate={() => setCreating(true)}
               onImport={() => setHomeRequest({ kind: "files" })}
@@ -1014,43 +1039,4 @@ function toHeaderScenario(scenario: ApiScenario): Scenario {
     name: scenario.name,
     dirty: scenario.last_run_at != null && scenario.updated_at > scenario.last_run_at,
   };
-}
-
-function NoScenarios({
-  onCreate,
-  onImport,
-  local,
-}: {
-  onCreate: () => void;
-  /** Local mode only: a backup file can be imported instead. */
-  onImport: () => void;
-  local: boolean;
-}) {
-  return (
-    <div style={{ padding: "40px 24px", maxWidth: 520 }}>
-      <h4 style={{ margin: "0 0 6px" }}>No scenarios yet</h4>
-      <p
-        style={{
-          margin: "0 0 14px",
-          fontSize: 13,
-          lineHeight: 1.5,
-          color: "color-mix(in srgb, var(--color-text) 58%, transparent)",
-        }}
-      >
-        A scenario holds the accounts, assets and events that make up one plan.
-        Your return-profile and tax library is already seeded.
-      </p>
-      {local && (
-        <p className="ns-mut" style={{ margin: "0 0 14px", fontSize: 12.5, lineHeight: 1.5 }}>
-          {PRIVACY_PROMISE}
-        </p>
-      )}
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-        <Button variant="primary" onClick={onCreate}>
-          Create a scenario
-        </Button>
-        {local && <Button onClick={onImport}>Import a backup file</Button>}
-      </div>
-    </div>
-  );
 }

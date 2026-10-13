@@ -128,6 +128,10 @@
   }
 
   /* The current tab: a short accent pill above the label. */
+  .mobile-tabbar button:disabled {
+    opacity: .3;
+  }
+
   .mobile-tabbar button[aria-current="page"] {
     opacity: 1;
     font-weight: 600;

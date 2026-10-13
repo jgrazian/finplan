@@ -26,7 +26,7 @@ import type { YearFocus } from "./useYearFocus";
  * 920-unit frame would shrink its 10px ticks to under 4px on a 375px screen;
  * a frame near the phone's own width keeps them readable.
  */
-const PHONE_GEOMETRY: ChartGeometry = {
+export const PHONE_GEOMETRY: ChartGeometry = {
   w: 360,
   h: 250,
   left: 46,

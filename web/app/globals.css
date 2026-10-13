@@ -86,12 +86,16 @@ body {
   }
 }
 
-/* Run and its in-flight progress share one fixed-width slot, so the header
-   never reflows when a run starts or ends. */
+/* Run is sized to its label: it is one action among several, not a banner.
+   Its in-flight progress needs room for a count and Cancel, so it takes a
+   fixed slot of its own while a run is going. */
 .app-header-run {
   flex: none;
-  width: 196px;
   box-sizing: border-box;
+}
+
+.app-header-run.run-progress {
+  width: 196px;
 }
 
 .run-progress {
@@ -159,8 +163,78 @@ body {
 }
 
 @media (max-width: 639px) {
-  .app-header-run {
+  .app-header-run.run-progress {
     width: 132px;
+  }
+}
+
+/* ── First visit ─────────────────────────────────────────────────────────
+   No plan yet: what FinPlan tells you beside a picture of it. The prose is
+   larger than the workbench's, since it is read once and carefully. */
+
+.start-card {
+  display: grid;
+  grid-template-columns: minmax(0, 400px) minmax(0, 1fr);
+  gap: 40px;
+  align-items: start;
+  padding: 40px 24px;
+}
+
+.start-copy h2 {
+  margin: 0 0 12px;
+  font-size: 26px;
+  line-height: 1.2;
+}
+
+.start-copy p {
+  margin: 0 0 14px;
+  font-size: 16px;
+  line-height: 1.55;
+}
+
+.start-card .start-quiet {
+  font-size: 14.5px;
+  line-height: 1.55;
+  color: color-mix(in srgb, var(--color-text) 66%, transparent);
+}
+
+.start-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 22px;
+}
+
+.start-sample {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  margin: 0;
+}
+
+.start-sample figcaption {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 4px 12px;
+  font-size: 13px;
+}
+
+.start-sample figcaption span {
+  color: color-mix(in srgb, var(--color-text) 58%, transparent);
+}
+
+.start-sample .start-quiet {
+  margin: 0;
+  font-size: 13.5px;
+}
+
+@media (max-width: 820px) {
+  .start-card {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 28px;
+    padding: 28px 16px;
   }
 }
 
@@ -425,6 +499,12 @@ tr:hover > * > .grip,
 .tab-inline:hover {
   color: var(--color-text);
   background: color-mix(in srgb, var(--color-text) 6%, transparent);
+}
+
+.tab-inline:disabled {
+  cursor: default;
+  background: transparent;
+  color: color-mix(in srgb, var(--color-text) 34%, transparent);
 }
 
 .tab-inline[aria-current="page"] {
