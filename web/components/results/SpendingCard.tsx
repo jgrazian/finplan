@@ -21,8 +21,7 @@ const PHONE_GEOMETRY: ChartGeometry = { w: 360, h: 250, left: 46, right: 8, top:
  * Built like the net-worth chart above it, from the same parts: a title and
  * subtitle, the envelope in the same frame, and the readout row under it for
  * the year in focus. Both charts share that focus, by year, so hovering
- * either points both at it. A second readout row says what the rule did
- * across every path.
+ * either points both at it.
  */
 export function SpendingCard({
   spending,
@@ -82,7 +81,6 @@ export function SpendingCard({
   const age = bands.ages[index];
   const range = (low: number | undefined, high: number | undefined) =>
     low == null || high == null ? "—" : `${fmtCompact(low)} – ${fmtCompact(high)}`;
-  const belowFirst = spending.medianYearsBelowFirst;
 
   return (
     <section aria-label="Spending" style={{ marginTop: 32 }}>
@@ -133,29 +131,6 @@ export function SpendingCard({
             />
           </div>
         </div>
-      </div>
-
-      <div className="chart-readout" style={{ marginTop: 6 }}>
-        <div className="chart-readout-stats">
-          <InlineStat label="first-year draw" value={`${fmtCompact(spending.medianFirstDraw)}/yr`} />
-          <InlineStat label="lowest draw, 1 in 10" value={`${fmtCompact(spending.p10LowestDraw)}/yr`} />
-          {spending.cutsCanExceed10 && (
-            <InlineStat label="cuts over 10%" value={`${Math.round(spending.cutRate * 100)}% of paths`} />
-          )}
-          <div className="chart-readout-extra">
-            <InlineStat
-              label="years below 90%"
-              value={belowFirst === 1 ? "1 year" : `${belowFirst} years`}
-            />
-          </div>
-          <div className="chart-readout-extra">
-            <InlineStat label="lifetime draws" value={fmtCompact(spending.medianLifetime)} />
-          </div>
-        </div>
-        <span style={{ fontSize: 12, color: MUTED }}>
-          {spending.rules.length > 0 ? `${spending.rules.join(" and ")} · ` : ""}
-          across every path · {dollars}
-        </span>
       </div>
     </section>
   );
