@@ -9,6 +9,8 @@
 //! Every dollar figure on a rule (an initial amount, a floor, a ceiling) is in
 //! plan-start dollars; the draw it produces is nominal.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 use super::ids::AccountId;
@@ -250,6 +252,9 @@ pub struct SpendingDiagnostics {
     pub years_below_first: u16,
     /// Every draw paid, summed.
     pub lifetime_real: f64,
+    /// Each year's decided draw, `(year, real draw)` ascending.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub decided: Vec<(i16, f64)>,
 }
 
 impl SpendingDiagnostics {
@@ -277,6 +282,7 @@ impl SpendingDiagnostics {
             largest_cut,
             years_below_first,
             lifetime_real,
+            decided: decided.to_vec(),
         })
     }
 }
@@ -295,6 +301,18 @@ pub struct SpendingStats {
     /// Median of `first_real`.
     #[serde(default)]
     pub median_first_draw: f64,
+    /// The decided draw by calendar year, over the paths that drew that year.
+    #[serde(default)]
+    pub by_year: Vec<SpendingYear>,
+}
+
+/// One year of [`SpendingStats::by_year`], plan-start dollars.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct SpendingYear {
+    pub year: i16,
+    pub p10: f64,
+    pub p50: f64,
+    pub p90: f64,
 }
 
 /// Mergeable per-batch state behind [`SpendingStats`].
@@ -305,6 +323,8 @@ pub struct SpendingAccumulator {
     lowest: Vec<f64>,
     largest_cut: Vec<f64>,
     years_below_first: Vec<f64>,
+    #[serde(default)]
+    by_year: BTreeMap<i16, Vec<f64>>,
 }
 
 impl SpendingAccumulator {
@@ -315,6 +335,9 @@ impl SpendingAccumulator {
         self.largest_cut.push(diagnostics.largest_cut);
         self.years_below_first
             .push(f64::from(diagnostics.years_below_first));
+        for (year, draw) in &diagnostics.decided {
+            self.by_year.entry(*year).or_default().push(*draw);
+        }
     }
 
     pub fn merge(&mut self, other: Self) {
@@ -323,6 +346,9 @@ impl SpendingAccumulator {
         self.lowest.extend(other.lowest);
         self.largest_cut.extend(other.largest_cut);
         self.years_below_first.extend(other.years_below_first);
+        for (year, draws) in other.by_year {
+            self.by_year.entry(year).or_default().extend(draws);
+        }
     }
 
     #[must_use]
@@ -343,6 +369,16 @@ impl SpendingAccumulator {
             cut_rate: cuts as f64 / self.largest_cut.len() as f64,
             median_years_below_first: sorted_quantile(&mut self.years_below_first, 0.5),
             median_first_draw: sorted_quantile(&mut self.first, 0.5),
+            by_year: self
+                .by_year
+                .into_iter()
+                .map(|(year, mut draws)| SpendingYear {
+                    year,
+                    p10: sorted_quantile(&mut draws, 0.10),
+                    p50: sorted_quantile(&mut draws, 0.5),
+                    p90: sorted_quantile(&mut draws, 0.90),
+                })
+                .collect(),
         })
     }
 }

@@ -161,6 +161,34 @@ fn fixed_reproduces_the_plain_expense_plan() {
 }
 
 #[test]
+fn every_row_draws_by_year() {
+    let (graph, _) = guardrails_plan();
+    let comparison = compare(&graph, &body(30), &mut Recording::default()).unwrap();
+    let years = |row: &SpendingComparisonRow| row.draws.iter().map(|d| d.year).collect::<Vec<_>>();
+    let planned = &comparison.rows[0];
+    assert!(!planned.draws.is_empty());
+    assert!(planned.draws.windows(2).all(|w| w[0].year < w[1].year));
+    for row in &comparison.rows {
+        assert!(
+            row.draws.iter().all(|d| d.p10 <= d.p50 && d.p50 <= d.p90),
+            "{} has its quantiles out of order",
+            row.label
+        );
+    }
+    // Fixed draws one amount every year it pays, the years the rules draw.
+    let fixed = &comparison.rows[1];
+    assert_eq!(years(fixed), years(planned));
+    assert!(
+        fixed
+            .draws
+            .iter()
+            .all(|d| d.p10 == fixed.median_first_draw && d.p90 == fixed.median_first_draw)
+    );
+    // A rule that moves with the market spreads.
+    assert!(planned.draws.iter().any(|d| d.p90 > d.p10));
+}
+
+#[test]
 fn chosen_rules_are_checked_and_counted() {
     let (graph, _) = guardrails_plan();
     let request = SpendingCompareRequest {

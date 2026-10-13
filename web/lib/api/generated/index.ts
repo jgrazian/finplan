@@ -239,6 +239,7 @@ export type { SpendingChoice } from "./SpendingChoice";
 export type { SpendingCompareRequest } from "./SpendingCompareRequest";
 export type { SpendingComparison } from "./SpendingComparison";
 export type { SpendingComparisonRow } from "./SpendingComparisonRow";
+export type { SpendingDrawYear } from "./SpendingDrawYear";
 export type { SpendingInitialSpec } from "./SpendingInitialSpec";
 export type { SpendingPortfolioSpec } from "./SpendingPortfolioSpec";
 export type { SpendingResults } from "./SpendingResults";

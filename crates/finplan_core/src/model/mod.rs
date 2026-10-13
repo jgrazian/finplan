@@ -39,7 +39,7 @@ pub use results::{
 pub use rmd::{RmdTable, RmdTableEntry};
 pub use spending::{
     RealSpendingSummary, SpendingAccumulator, SpendingDiagnostics, SpendingInitial, SpendingInputs,
-    SpendingPortfolio, SpendingRule, SpendingRuleState, SpendingStats, pmt,
+    SpendingPortfolio, SpendingRule, SpendingRuleState, SpendingStats, SpendingYear, pmt,
 };
 pub use state_event::{CashFlowKind, LedgerEntry, StateEvent, TaxedIncome};
 pub use tax_config::{TaxBracket, TaxConfig, TaxSummary};

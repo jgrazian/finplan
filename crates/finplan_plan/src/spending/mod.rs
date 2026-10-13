@@ -12,6 +12,8 @@
 #[cfg(test)]
 mod tests;
 
+use std::collections::BTreeSet;
+
 use finplan_core::analysis::McRunner;
 use finplan_core::config::SimulationConfig;
 use finplan_core::model::{
@@ -87,6 +89,19 @@ pub struct SpendingComparisonRow {
     /// median path's inflation.
     pub median_final_net_worth: f64,
     pub median_final_net_worth_real: Option<f64>,
+    /// The draw by calendar year, real: P10, P50 and P90 over the markets
+    /// that drew that year. A fixed expense draws one amount every year.
+    pub draws: Vec<SpendingDrawYear>,
+}
+
+/// One year of a row's [`draws`](SpendingComparisonRow::draws).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct SpendingDrawYear {
+    pub year: i16,
+    pub p10: f64,
+    pub p50: f64,
+    pub p90: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -504,24 +519,45 @@ pub fn compare(
                 s.p10_lowest_draw,
                 s.cut_rate,
                 s.median_first_draw,
+                s.by_year
+                    .iter()
+                    .map(|y| SpendingDrawYear {
+                        year: y.year,
+                        p10: y.p10,
+                        p50: y.p50,
+                        p90: y.p90,
+                    })
+                    .collect(),
             ),
             // A fixed expense draws the same real amount in every market.
             None => {
-                let occurrences = path.as_ref().map_or(0, |p| {
+                let paid: Vec<i16> = path.as_ref().map_or_else(Vec::new, |p| {
                     p.ledger
                         .iter()
                         .filter(|e| {
                             e.source_event == Some(target.engine)
                                 && matches!(e.event, StateEvent::CashDebit { .. })
                         })
-                        .count()
+                        .map(|e| e.date.year())
+                        .collect()
                 });
+                let occurrences = paid.len();
+                let years: BTreeSet<i16> = paid.into_iter().collect();
                 let draw = fixed_draw(&config, &target).unwrap_or(first_draw);
                 (
                     draw / f64::from(target.per_year) * occurrences as f64,
                     draw,
                     0.0,
                     draw,
+                    years
+                        .into_iter()
+                        .map(|year| SpendingDrawYear {
+                            year,
+                            p10: draw,
+                            p50: draw,
+                            p90: draw,
+                        })
+                        .collect(),
                 )
             }
         };
@@ -537,6 +573,7 @@ pub fn compare(
             median_first_draw: spending.3,
             median_final_net_worth: median,
             median_final_net_worth_real: inflation.map(|factor| median / factor),
+            draws: spending.4,
         });
     }
 

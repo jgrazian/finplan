@@ -290,3 +290,71 @@ export function withSpending(event: Event, effect: EffectSpec): EventBody {
     effects,
   };
 }
+
+/** One rule's line on the Spending rules chart. */
+export interface RuleSeries {
+  key: string;
+  label: string;
+  /** A series color; As planned is drawn in ink, dashed. */
+  color: string;
+  dashed: boolean;
+  /** Aligned to `RuleChart.years`; null where the rule drew nothing that year. */
+  p10: (number | null)[];
+  p50: (number | null)[];
+  p90: (number | null)[];
+}
+
+/** The comparison's yearly draws, every row on one year axis. */
+export interface RuleChart {
+  years: number[];
+  series: RuleSeries[];
+}
+
+/** Top of the value axis: every median, and the whole of the selected rule's band. */
+export function ruleChartMax(chart: RuleChart, selected: number): number {
+  const band = chart.series[selected]?.p90 ?? [];
+  const values = [...chart.series.flatMap((s) => s.p50), ...band].filter(
+    (v): v is number => v != null && Number.isFinite(v),
+  );
+  return Math.max(0, ...values) || 1;
+}
+
+/**
+ * A color per rule, following the rule rather than its row, so a rule keeps
+ * its color whichever choices a comparison asks for. A second row of one
+ * kind takes the next free slot.
+ */
+const RULE_SERIES: Record<SpendingComparisonRow["choice"]["kind"] | SpendingRuleKind, number> = {
+  AsPlanned: 0,
+  Rule: 0,
+  PercentOfPortfolio: 1,
+  Guardrails: 2,
+  CappedChange: 3,
+  Fixed: 4,
+  Vpw: 5,
+};
+
+/** The comparison's rows as lines on one chart. */
+export function ruleChart(comparison: SpendingComparison): RuleChart {
+  const years = [...new Set(comparison.rows.flatMap((r) => (r.draws ?? []).map((d) => d.year)))].sort((a, b) => a - b);
+  const used = new Set<number>();
+  const series = comparison.rows.map((row, i): RuleSeries => {
+    const kind = row.choice.kind === "Rule" ? row.choice.rule.rule : row.choice.kind;
+    let slot = RULE_SERIES[kind];
+    if (slot > 0 && used.has(slot)) slot = [6, 7, 8].find((s) => !used.has(s)) ?? slot;
+    if (slot > 0) used.add(slot);
+    // A comparison from before draws were kept has none: the chart then stays empty.
+    const byYear = new Map((row.draws ?? []).map((d) => [d.year, d]));
+    const pick = (key: "p10" | "p50" | "p90") => years.map((y) => byYear.get(y)?.[key] ?? null);
+    return {
+      key: `${i}:${row.label}`,
+      label: row.label,
+      color: slot === 0 ? "var(--color-text)" : `var(--color-series-${slot})`,
+      dashed: slot === 0,
+      p10: pick("p10"),
+      p50: pick("p50"),
+      p90: pick("p90"),
+    };
+  });
+  return { years, series };
+}

@@ -197,7 +197,7 @@ struct CallAnswer {
 #[serde(rename_all = "snake_case")]
 enum Answer {
     Stats {
-        stats: MonteCarloStats,
+        stats: Box<MonteCarloStats>,
         seeds: Vec<(f64, u64)>,
     },
     Summary(Box<MonteCarloSummary>),
@@ -296,7 +296,7 @@ impl McRunner for Shard<'_> {
             index,
             key: call_key("stats", config, mc),
             answer: Answer::Stats {
-                stats: stats.clone(),
+                stats: Box::new(stats.clone()),
                 seeds: seeds.clone(),
             },
         });
@@ -377,7 +377,7 @@ impl McRunner for Replay<'_> {
         mc: &MonteCarloConfig,
     ) -> Result<StatsRun, SimulationError> {
         match self.take("stats", config, mc) {
-            Some(Answer::Stats { stats, seeds }) => Ok((stats, seeds)),
+            Some(Answer::Stats { stats, seeds }) => Ok((*stats, seeds)),
             _ => self.local.stats(config, mc),
         }
     }

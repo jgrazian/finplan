@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { EmptyState } from "@/components/screens/EmptyState";
 import { Button } from "@/components/ui";
 import type { Scenario, SpendingComparison } from "@/lib/api/types";
@@ -9,7 +9,8 @@ import { fmtCompact, fmtPercent } from "@/lib/format";
 import { useAsync } from "@/lib/hooks/useAsync";
 import { useSubmit } from "@/lib/hooks/useSubmit";
 import { usePlanApi } from "@/lib/nav";
-import { ruleLines, withSpending } from "@/lib/view/spending";
+import { ruleChart, ruleLines, withSpending } from "@/lib/view/spending";
+import { SpendingRulesChart } from "./SpendingRulesChart";
 
 const MUTED = "color-mix(in srgb, var(--color-text) 58%, transparent)";
 
@@ -43,6 +44,9 @@ export function SpendingRulesPanel({
     return () => abort.abort();
   }, [api, run]);
   const current = compared?.run === run?.id ? compared : undefined;
+  const chart = useMemo(() => (current?.data ? ruleChart(current.data) : undefined), [current]);
+  // The rule whose band the chart shades; As planned to begin with.
+  const [selected, setSelected] = useState(0);
 
   const [notice, setNotice] = useState<string>();
   const submit = useSubmit();
@@ -116,12 +120,24 @@ export function SpendingRulesPanel({
   const cell = { textAlign: "right" as const, padding: "4px 10px" };
 
   return (
-    <div style={{ padding: "22px 24px", display: "flex", flexDirection: "column", gap: 14, maxWidth: 980 }}>
+    <div
+      style={{
+        padding: "22px 24px",
+        display: "flex",
+        flexDirection: "column",
+        gap: 14,
+        width: "100%",
+        maxWidth: 980,
+        margin: "0 auto",
+        boxSizing: "border-box",
+      }}
+    >
       <div style={{ fontSize: 13, lineHeight: 1.5 }}>
         <strong>{comparison.event_name}</strong> under each rule, starting at the plan’s first-year draw of{" "}
         {fmtCompact(comparison.first_draw)} ({fmtPercent(comparison.initial_rate, 1)} of the portfolio when it
         starts). Figures are in today’s dollars.
       </div>
+      {chart && <SpendingRulesChart chart={chart} selected={selected} onSelect={setSelected} />}
       <section aria-label="Spending rule comparison" style={{ fontSize: 12.5 }}>
         <div style={{ color: MUTED, marginBottom: 6 }}>
           {comparison.iterations} markets each, the same markets for every rule
@@ -141,8 +157,48 @@ export function SpendingRulesPanel({
             </thead>
             <tbody>
               {lines.map((line, i) => (
-                <tr key={line.key} style={{ borderTop: "1px solid var(--color-divider)" }}>
-                  <td style={{ padding: "4px 10px 4px 0", whiteSpace: "nowrap" }}>{line.label}</td>
+                <tr
+                  key={line.key}
+                  style={{
+                    borderTop: "1px solid var(--color-divider)",
+                    background: i === selected ? "color-mix(in srgb, var(--color-text) 4%, transparent)" : undefined,
+                  }}
+                >
+                  <td style={{ padding: "4px 10px 4px 0", whiteSpace: "nowrap" }}>
+                    <button
+                      type="button"
+                      aria-pressed={i === selected}
+                      title="Show this rule's range on the chart"
+                      onClick={() => setSelected(i)}
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: 6,
+                        padding: 0,
+                        border: 0,
+                        background: "none",
+                        color: "inherit",
+                        font: "inherit",
+                        fontWeight: i === selected ? 600 : undefined,
+                        cursor: "pointer",
+                      }}
+                    >
+                      {chart?.series[i] && (
+                        <svg width={14} height={8} aria-hidden style={{ flex: "none" }}>
+                          <line
+                            x1={0}
+                            x2={14}
+                            y1={4}
+                            y2={4}
+                            stroke={chart.series[i].color}
+                            strokeWidth={2}
+                            strokeDasharray={chart.series[i].dashed ? "4 3" : undefined}
+                          />
+                        </svg>
+                      )}
+                      {line.label}
+                    </button>
+                  </td>
                   <td style={{ ...cell, ...best(line.bestFunding) }}>
                     {line.row.funding_success_rate == null ? "—" : fmtPercent(line.row.funding_success_rate, 1)}
                   </td>
