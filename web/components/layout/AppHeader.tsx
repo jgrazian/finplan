@@ -1,6 +1,6 @@
 "use client";
 
-import { type ReactNode, useMemo } from "react";
+import { type ReactNode, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Button, Dropdown, type DropdownOption, Tag } from "@/components/ui";
 import { HOME_LABEL, HomeIcon } from "@/components/local/HomeIcon";
 import type { Run } from "@/lib/api/types";
@@ -235,8 +235,17 @@ export function AppHeader<T extends string>({
       {active?.dirty && <Tag tone="outline">results stale</Tag>}
       {trailing}
 
+      <RunSlot>
       {running ? (
-        <RunProgress run={run} onCancel={onCancel} server={runWhere === "server"} />
+        // The progress is the line along the header's foot; this slot keeps
+        // Run's size and offers the way to stop.
+        <Button
+          className="app-header-run"
+          onClick={onCancel}
+          title={runProgress(run, runWhere === "server").text}
+        >
+          Cancel
+        </Button>
       ) : (
         <Button
           className="app-header-run"
@@ -249,6 +258,7 @@ export function AppHeader<T extends string>({
           Run
         </Button>
       )}
+      </RunSlot>
 
       {guest ? (
         <>
@@ -281,6 +291,7 @@ export function AppHeader<T extends string>({
           {userInitials}
         </button>
       )}
+      <RunLine run={run} running={running === true} server={runWhere === "server"} />
     </header>
 
     {/* Phones: the same tabs, as a fixed bar along the bottom edge. */}
@@ -303,52 +314,81 @@ export function AppHeader<T extends string>({
 }
 
 /**
- * Run's slot while a run is in flight: status and count over a thin fill,
- * with Cancel at the end. It shows from every tab. It is wider than Run, which
- * is sized to its label, so the controls left of it step aside while it runs.
+ * Where Run and its progress take turns. Run is sized to its label and the
+ * progress is wider, so the slot eases between their widths instead of
+ * snapping, and the controls left of it glide aside rather than jump. The
+ * content keeps its own width inside and is clipped while the slot moves.
  */
-function RunProgress({
-  run,
-  onCancel,
-  server,
-}: {
-  run: Run | undefined;
-  onCancel?: () => void;
-  server?: boolean;
-}) {
+function RunSlot({ children }: { children: ReactNode }) {
+  const inner = useRef<HTMLDivElement>(null);
+  const [width, setWidth] = useState<number>();
+  useLayoutEffect(() => {
+    const el = inner.current;
+    if (!el) return;
+    const measure = () => setWidth(el.offsetWidth);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+  return (
+    <div className="app-header-run-slot" style={{ width }}>
+      <div ref={inner} className="app-header-run-inner">
+        {children}
+      </div>
+    </div>
+  );
+}
+
+/** What a run is doing and how far it has got, for the line and the words. */
+function runProgress(run: Run | undefined, server: boolean) {
   const done = run?.completed_iterations ?? 0;
-  // A converging run stops when its median settles, so the bar is filling
-  // towards a ceiling it is not expected to reach. Reading it against the
-  // minimum sample instead would sit at 100% for most of the run.
+  // A converging run stops when its median settles, so it fills towards a
+  // ceiling it is not expected to reach.
   const converging = run?.converge === true;
   const total = (converging ? run?.max_iterations : run?.iterations) ?? 0;
-  const pct = total > 0 ? Math.min(100, (done / total) * 100) : 0;
   const queued = run?.status === "queued";
   const f = (n: number) => n.toLocaleString("en-US");
+  const word = queued ? "Queued" : server ? "Simulating on FinPlan's servers" : "Simulating";
+  return {
+    queued,
+    pct: total > 0 ? Math.min(100, (done / total) * 100) : 0,
+    text: queued ? word : `${word}: ${f(done)} of ${converging ? "at most " : ""}${f(total)} iterations`,
+  };
+}
 
+/**
+ * The run's progress as the header's divider filling in from the left, so
+ * nothing in the bar changes size while a plan runs. It belongs to one run:
+ * a new run starts its own line from empty, and a finished one fills to the
+ * end and fades rather than vanishing.
+ */
+function RunLine({ run, running, server }: { run: Run | undefined; running: boolean; server: boolean }) {
+  // One line per run seen going by, numbered rather than keyed by the run's
+  // id (an offload's stand-in run always has the same one). Until a run is
+  // seen there is no line: a finished run already on screen at load is not news.
+  const [wasRunning, setWasRunning] = useState(false);
+  const [line, setLine] = useState<{ n: number; id: number | undefined }>();
+  if (running !== wasRunning) {
+    setWasRunning(running);
+    if (running) setLine({ n: (line?.n ?? 0) + 1, id: run?.id });
+  } else if (running && line && run?.id !== line.id) {
+    // The next run took over with no pause between them.
+    setLine({ n: line.n + 1, id: run?.id });
+  }
+  if (!line) return null;
+  const { queued, pct, text } = runProgress(run, server);
   return (
     <div
-      className="app-header-run run-progress"
-      role="status"
-      title={
-        converging
-          ? `${f(done)} iterations · sampling until the median settles, up to ${f(total)}`
-          : `${f(done)} of ${f(total)} iterations`
-      }
+      key={line.n}
+      className={`app-header-progress${running ? "" : " done"}${running && queued ? " queued" : ""}`}
+      role="progressbar"
+      aria-label={running ? text : "Run finished"}
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-valuenow={Math.round(running ? pct : 100)}
     >
-      <div className="run-progress-body">
-        <span className="run-progress-word">
-          {queued ? "Queued" : server ? "On servers" : "Simulating"}
-        </span>
-        <span className="run-progress-count">
-          {f(done)} / {converging ? "≤" : ""}
-          {f(total)}
-        </span>
-        <i className="run-progress-fill" style={{ width: `${pct}%` }} />
-      </div>
-      <button type="button" className="run-progress-cancel" title="Cancel run" onClick={onCancel}>
-        Cancel
-      </button>
+      <i style={{ width: `${running ? pct : 100}%` }} />
     </div>
   );
 }

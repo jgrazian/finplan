@@ -101,7 +101,7 @@
     display: none;
   }
 
-  .app-header-start .app-header-run {
+  .app-header-start .app-header-run-slot {
     margin-left: auto;
   }
 
