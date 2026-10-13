@@ -209,6 +209,27 @@ body {
   margin-top: 12px;
 }
 
+/* AI-assisted setup, offered to someone without an account. */
+.start-ai {
+  margin-top: 22px;
+  padding: 14px 16px;
+  border: 1px solid color-mix(in srgb, var(--color-accent) 25%, transparent);
+  border-radius: var(--radius-lg);
+  background: var(--color-accent-100);
+}
+
+.start-card .start-ai p {
+  margin: 6px 0 10px;
+  font-size: 14.5px;
+}
+
+.start-ai-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+}
+
 /* A guest's sign-in, here only where the header has no room for it. */
 .start-account {
   display: none;

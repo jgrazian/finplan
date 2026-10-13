@@ -7,7 +7,7 @@ import { usePlanCapabilities } from "@/lib/hooks/usePlanCapabilities";
 import { useLocalRuntime } from "@/lib/hooks/useLocalRuntime";
 import { type ReviewActions, localReviewActions } from "@/lib/local/review";
 import { MOVE_TO_CLOUD_FOR_AI } from "@/lib/nav/capabilities";
-import { Button, SegmentedControl } from "@/components/ui";
+import { Button, SegmentedControl, Switch } from "@/components/ui";
 import { api } from "@/lib/api/client";
 import { ApiError } from "@/lib/api/http";
 import type { AiPlanChat, SuggestionKind } from "@/lib/api/suggestions";
@@ -119,6 +119,64 @@ interface ReviewProps {
 
 type ReviewSection = "notes" | "chat";
 
+/** This browser's choice of AI notes on a review, kept across visits. */
+const AI_NOTES_KEY = "finplan.review.ai";
+
+function useAiNotesPreference(): [boolean, (on: boolean) => void] {
+  const [on, setOn] = useState(() => {
+    try {
+      return localStorage.getItem(AI_NOTES_KEY) !== "0";
+    } catch {
+      return true;
+    }
+  });
+  const set = useCallback((next: boolean) => {
+    setOn(next);
+    try {
+      localStorage.setItem(AI_NOTES_KEY, next ? "1" : "0");
+    } catch {
+      // Blocked storage: the choice holds for this visit only.
+    }
+  }, []);
+  return [on, set];
+}
+
+/**
+ * Whether the next review adds the model-written pass. Where it cannot, the
+ * switch stays in view, off and locked, saying what would turn it on: it is
+ * the one place a plan's notes show what an account adds.
+ */
+function AiNotesToggle({
+  on,
+  onToggle,
+  disabled,
+  locked,
+}: {
+  on: boolean;
+  onToggle: (on: boolean) => void;
+  disabled?: boolean;
+  /** Why AI notes are unavailable here, with the way to get them. */
+  locked?: React.ReactNode;
+}) {
+  return (
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 13 }}>
+      <Switch label="AI notes" on={locked ? false : on} disabled={disabled || locked != null} onToggle={onToggle} />
+      <span
+        title={
+          locked
+            ? undefined
+            : on
+              ? "The review adds notes a model writes after reading the plan and its run."
+              : "Rule-based notes only: nothing about the plan is sent to a model."
+        }
+      >
+        AI notes
+      </span>
+      {locked && <span style={{ color: MUTED }}>· {locked}</span>}
+    </span>
+  );
+}
+
 const REVIEW_SECTIONS = [
   { value: "notes" as const, label: "Notes" },
   { value: "chat" as const, label: "Chat" },
@@ -183,6 +241,20 @@ function PlanReview({
   const nav = useNav();
   const guest = useGuest();
   const chatAvailable = planChat != null && review?.ai != null;
+  // The server answers plan chat only where it has a model for this user,
+  // and the same model writes AI notes: one signal for both.
+  const [aiOn, setAiOn] = useAiNotesPreference();
+  const aiLocked: React.ReactNode =
+    planChat != null ? undefined : guest.restricted || (local && guest.guest) ? (
+      <CreateAccountLink label="Create a free account to turn them on" />
+    ) : local ? (
+      `${MOVE_TO_CLOUD_FOR_AI} notes`
+    ) : undefined;
+  // A server with no model at all (self-hosted) shows no switch.
+  const aiToggle =
+    planChat != null || aiLocked != null ? (
+      <AiNotesToggle on={aiOn} onToggle={setAiOn} disabled={reviewing} locked={aiLocked} />
+    ) : null;
   const section: ReviewSection = chatAvailable && nav.section === "chat" ? "chat" : "notes";
   const [busy, setBusy] = useState<number>();
   // What happened when a card's path was last acted on, by "id:path": a
@@ -236,7 +308,7 @@ function PlanReview({
     setSelections({});
     setNotice(undefined);
     appliedHere.current.clear();
-    void reviewRun(latest?.id ?? null);
+    void reviewRun(latest?.id ?? null, planChat != null && aiOn);
   };
 
   const rerun = () => {
@@ -453,7 +525,7 @@ function PlanReview({
             ? error.message
             : "A review reads the plan and its latest run, and writes notes about each part: what looks off, what to check, and edits you can apply, then re-run together."}
         </p>
-        <div>
+        <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "8px 16px" }}>
           <Button
             variant="primary"
             disabled={offline || reviewing || latest == null}
@@ -461,14 +533,10 @@ function PlanReview({
           >
             {reviewing ? "Reviewing…" : "Review this run"}
           </Button>
+          {aiToggle}
         </div>
         {latest == null && (
           <p style={{ margin: 0, fontSize: 12, color: MUTED }}>Run the plan first; a review is written about a finished run.</p>
-        )}
-        {guest.restricted && (
-          <p style={{ margin: 0, fontSize: 12, color: MUTED }}>
-            Plan chat and AI notes need an account. <CreateAccountLink />.
-          </p>
         )}
       </div>
     );
@@ -501,11 +569,6 @@ function PlanReview({
             ? "Ask about the plan or for a change; changes come back as notes for you to apply."
             : view.headline}
         </span>
-        {guest.restricted && (
-          <span style={{ fontSize: 13, color: MUTED }}>
-            Plan chat and AI notes need an account. <CreateAccountLink />.
-          </span>
-        )}
         {ai && (
           <span
             role="status"
@@ -549,6 +612,7 @@ function PlanReview({
               )}
             </div>
           )}
+          {aiToggle}
           {/* One primary action at a time: the banner's, when it has one. */}
           {banner?.action !== "review" && (
             <Button variant={banner?.action ? "ghost" : "secondary"} disabled={offline || reviewing} onClick={reviewAgain}>

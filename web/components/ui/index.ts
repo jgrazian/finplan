@@ -16,6 +16,7 @@ export { SectionHeading } from "./SectionHeading";
 export { SegmentedControl } from "./SegmentedControl";
 export type { SegmentOption } from "./SegmentedControl";
 export { InlineStat, Stat, StatLabel } from "./Stat";
+export { Switch } from "./Switch";
 export { Table, Td, Th } from "./Table";
 export { Tag } from "./Tag";
 export { Tooltip } from "./Tooltip";

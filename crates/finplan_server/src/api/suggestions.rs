@@ -162,6 +162,11 @@ pub struct ReviewRequest {
     /// The run to review; defaults to the scenario's latest succeeded run.
     #[serde(default)]
     pub run_id: Option<i64>,
+    /// Whether a model-written pass follows the rule notes, where the
+    /// server has a model for this user; absent means yes. Off, the review
+    /// is the rule notes alone and spends nothing.
+    #[serde(default)]
+    pub ai: Option<bool>,
 }
 
 /// A suggestion as a client (usually a model) writes it.
@@ -682,7 +687,9 @@ async fn review(
     // them rather than repeating them, and the ones the user dismissed, so
     // it does not raise them again.
     // A hosted guest gets the rule notes only: no model pass (spec 17).
-    let context = state.review_ai_for(&user).is_some().then(|| {
+    // Nor does a review that asked for none.
+    let wants_ai = body.ai.unwrap_or(true);
+    let context = (wants_ai && state.review_ai_for(&user).is_some()).then(|| {
         ReviewContext::build(&graph, &results, &drafts)
             .with_open_notes(
                 carried

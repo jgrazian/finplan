@@ -11,8 +11,11 @@ export interface ReviewState {
   error: Error | undefined;
   /** Re-reads the stored review, e.g. after a note is applied or dismissed. */
   reload: () => void;
-  /** Writes a fresh review of `runId` (the latest succeeded run when null). */
-  reviewRun: (runId: number | null) => Promise<void>;
+  /**
+   * Writes a fresh review of `runId` (the latest succeeded run when null).
+   * `ai: false` leaves out the model-written pass; a local review has none.
+   */
+  reviewRun: (runId: number | null, ai?: boolean) => Promise<void>;
   reviewing: boolean;
 }
 
@@ -38,8 +41,14 @@ export function useReview(
   local?: LocalReviewApi,
 ): ReviewState {
   const scenarioId = available ? rawScenarioId : undefined;
-  const reviews = useMemo(
-    () => (local ? { get: local.get, run: local.run } : { get: api.review.get, run: api.review.run }),
+  const reviews = useMemo<{
+    get: (scenarioId: number) => Promise<Review | null>;
+    run: (scenarioId: number, runId: number | null, ai: boolean) => Promise<Review>;
+  }>(
+    () =>
+      local
+        ? { get: local.get, run: (scenarioId, runId) => local.run(scenarioId, runId) }
+        : { get: api.review.get, run: api.review.run },
     [local],
   );
   const [loaded, setLoaded] = useState<{ id?: number; review?: Review | null; error?: Error }>({});
@@ -79,11 +88,11 @@ export function useReview(
   }, [scenarioId, running, reviews]);
 
   const reviewRun = useCallback(
-    async (runId: number | null) => {
+    async (runId: number | null, ai = true) => {
       if (scenarioId == null) return;
       setReviewing(true);
       try {
-        const review = await reviews.run(scenarioId, runId);
+        const review = await reviews.run(scenarioId, runId, ai);
         setLoaded({ id: scenarioId, review });
       } catch (error) {
         setLoaded((previous) => ({ ...previous, id: scenarioId, error: error as Error }));

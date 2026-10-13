@@ -71,6 +71,7 @@ import { BETA_ACCESS_NOTICE } from "@/lib/view/access";
 import { clockTime, pathChecks, summarizeIssues } from "@/lib/view/issues";
 import { type Destination, noteCounts } from "@/lib/view/review";
 import { examplePlan, freshName } from "@/lib/view/setup";
+import { useServerAi } from "@/lib/hooks/useServerAi";
 import { useSubmit } from "@/lib/hooks/useSubmit";
 
 /** The tabs that describe the scenario; account settings is not one. */
@@ -531,6 +532,7 @@ function Workbench({
   // The start card's example: an invented household made through guided
   // setup in the home a new plan goes to, then opened and run like one.
   const example = useSubmit();
+  const serverAi = useServerAi();
   const takenNames = useMemo(() => list.map((row) => row.name), [list]);
   const openExample = useCallback(() => {
     let created: ApiScenario | undefined;
@@ -922,6 +924,7 @@ function Workbench({
               exampleBusy={example.busy}
               exampleError={example.error}
               account={user.guest ? { onSignUp, onSignIn } : undefined}
+              ai={serverAi}
               local={localMode}
               onCreate={() => setCreating(true)}
               onImport={() => setHomeRequest({ kind: "files" })}

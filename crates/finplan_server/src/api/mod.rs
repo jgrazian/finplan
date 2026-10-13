@@ -83,6 +83,10 @@ pub struct Health {
     /// The engine's `MODEL_VERSION`. A browser bundle built for another one
     /// is stale; offload refuses it.
     pub model_version: &'static str,
+    /// The server has an AI model: an account can draft a plan from a
+    /// description or statements, and review it with AI notes and chat. Said
+    /// before sign-in, so a visitor can be shown what an account adds.
+    pub ai: bool,
 }
 
 async fn health(State(state): State<AppState>) -> Json<Health> {
@@ -90,6 +94,7 @@ async fn health(State(state): State<AppState>) -> Json<Health> {
         status: "ok",
         local_mode: state.config.local_mode,
         model_version: finplan_plan::snapshot::MODEL_VERSION,
+        ai: state.review_ai.is_some(),
     })
 }
 

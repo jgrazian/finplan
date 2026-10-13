@@ -5,4 +5,10 @@ export type ReviewRequest = {
    * The run to review; defaults to the scenario's latest succeeded run.
    */
   run_id?: number | null;
+  /**
+   * Whether a model-written pass follows the rule notes, where the
+   * server has a model for this user; absent means yes. Off, the review
+   * is the rule notes alone and spends nothing.
+   */
+  ai?: boolean | null;
 };

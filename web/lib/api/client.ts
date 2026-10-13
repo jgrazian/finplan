@@ -106,11 +106,12 @@ export const api = {
    * The Review tab: notes written about one run, each carrying the plan
    * changes it proposes. `run` writes a fresh review of the named run (the
    * latest succeeded one when `null`); `get` reads the last one written.
+   * `ai: false` asks for the rule notes alone, with no model-written pass.
    */
   review: {
     get: (scenarioId: number) => http.get<Review | null>(`${scenario(scenarioId)}/review`),
-    run: (scenarioId: number, runId: number | null = null) =>
-      http.post<Review>(`${scenario(scenarioId)}/review`, { run_id: runId }),
+    run: (scenarioId: number, runId: number | null = null, ai = true) =>
+      http.post<Review>(`${scenario(scenarioId)}/review`, { run_id: runId, ai }),
   },
 
   suggestions: {

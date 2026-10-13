@@ -435,3 +435,123 @@
     max-width: 100%;
   }
 }
+
+/* Describe & upload without an account: what AI setup does, beside an
+   example of it, with the way to an account. */
+.ai-pitch {
+  display: grid;
+  grid-template-columns: minmax(0, 460px) minmax(0, 380px);
+  gap: 48px;
+  align-items: start;
+  padding: 40px 26px;
+}
+
+.ai-pitch-mark,
+.start-ai-mark {
+  display: inline-block;
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: .02em;
+  color: var(--color-accent-700);
+}
+
+.ai-pitch-copy h2 {
+  margin: 8px 0 12px;
+  font-size: 26px;
+  line-height: 1.2;
+}
+
+.ai-pitch-copy p {
+  margin: 0 0 14px;
+  font-size: 15px;
+  line-height: 1.55;
+}
+
+.ai-pitch-steps {
+  margin: 0 0 16px;
+  list-style: decimal;
+  padding-left: 20px;
+  font-size: 14.5px;
+  line-height: 1.7;
+}
+
+.ai-pitch-copy .ai-pitch-quiet {
+  font-size: 13.5px;
+  color: color-mix(in srgb, var(--color-text) 64%, transparent);
+}
+
+.ai-pitch-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 18px;
+}
+
+.ai-pitch-example {
+  margin: 0;
+  padding: 18px;
+  border: 1px solid color-mix(in srgb, var(--color-accent) 25%, transparent);
+  border-radius: var(--radius-lg);
+  background: var(--color-accent-100);
+  font-size: 13.5px;
+}
+
+.ai-pitch-example figcaption {
+  margin-bottom: 8px;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--color-accent-700);
+}
+
+.ai-pitch-example blockquote {
+  margin: 0;
+  padding: 12px 14px;
+  border-radius: var(--radius-md);
+  background: var(--color-raised);
+  line-height: 1.5;
+}
+
+.ai-pitch-arrow {
+  margin: 6px 0;
+  text-align: center;
+  color: var(--color-accent-700);
+}
+
+.ai-pitch-example dl {
+  margin: 0;
+  padding: 6px 14px;
+  border-radius: var(--radius-md);
+  background: var(--color-raised);
+}
+
+.ai-pitch-example dl div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--color-divider);
+}
+
+.ai-pitch-example dl div:last-child {
+  border-bottom: 0;
+}
+
+.ai-pitch-example dt {
+  color: color-mix(in srgb, var(--color-text) 66%, transparent);
+}
+
+.ai-pitch-example dd {
+  margin: 0;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 820px) {
+  .ai-pitch {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 28px;
+    padding: 28px 16px;
+  }
+}

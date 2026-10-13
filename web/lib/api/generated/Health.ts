@@ -16,4 +16,10 @@ export type Health = {
    * is stale; offload refuses it.
    */
   model_version: string;
+  /**
+   * The server has an AI model: an account can draft a plan from a
+   * description or statements, and review it with AI notes and chat. Said
+   * before sign-in, so a visitor can be shown what an account adds.
+   */
+  ai: boolean;
 };

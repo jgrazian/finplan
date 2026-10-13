@@ -32,7 +32,9 @@ import {
   switchRule,
 } from "@/lib/view/spending";
 import type { SpendingRuleSpec } from "@/lib/api/types";
+import { useServerAi } from "@/lib/hooks/useServerAi";
 import { DescribeSetup } from "./DescribeSetup";
+import { AI_MARK, DescribePitch } from "./DescribePitch";
 import { SetupBar } from "./SetupBar";
 import {
   SetupPreview,
@@ -286,20 +288,24 @@ export function NewScenarioScreen(props: NewScenarioProps) {
   // this device cannot have one: Describe & upload is the locked state AI
   // features show there, and Guided is where the person lands instead.
   const capabilities = planCapabilities(props.home, { account: !guest });
-  const mode: Mode = !capabilities.ai && chosen === "describe" ? "guided" : chosen;
+  // Without an account on a server that has AI, Describe & upload opens what
+  // it would do and the way to an account, rather than sitting locked.
+  const serverAi = useServerAi();
+  const pitch = guest && drafts == null && serverAi;
+  const mode: Mode = !capabilities.ai && !pitch && chosen === "describe" ? "guided" : chosen;
   const describable =
     capabilities.ai && access != null && drafts != null && props.onReviewDraft != null && props.onDraftCreated != null;
   // A hosted guest has no AI drafts: Describe & upload stays in the list,
   // locked, with the way to unlock it beside it.
   const lockedForGuest = capabilities.ai && restricted && drafts == null;
   const lockedForHome = !capabilities.ai && drafts != null;
-  const locked = lockedForGuest || lockedForHome;
+  const locked = (lockedForGuest || lockedForHome) && !pitch;
   const modeSwitch = (
     <>
       {props.onHomeChange && <HomeSwitch home={props.home} onChange={props.onHomeChange} />}
       <ModeSwitch
         mode={mode}
-        describable={describable}
+        describable={describable || pitch}
         locked={locked}
         lockedTitle={
           lockedForHome
@@ -311,13 +317,16 @@ export function NewScenarioScreen(props: NewScenarioProps) {
         }
         onChange={setMode}
       />
-      {lockedForGuest && (
+      {lockedForGuest && !pitch && (
         <span className="ns-mut">
           AI drafts and document upload need an account. <CreateAccountLink />.
         </span>
       )}
     </>
   );
+  if (pitch && mode === "describe") {
+    return <DescribePitch modeSwitch={modeSwitch} onGuided={() => setMode("guided")} />;
+  }
   if (access && drafts && props.onReviewDraft && props.onDraftCreated && mode === "describe") {
     return (
       <DescribeSetup
@@ -394,7 +403,9 @@ function ModeSwitch({
 }) {
   const options: SegmentOption<Mode>[] = [
     { value: "guided", label: "Guided" },
-    ...(describable ? [{ value: "describe" as const, label: "Describe & upload" }] : []),
+    ...(describable
+      ? [{ value: "describe" as const, label: "Describe & upload", icon: <span aria-hidden>{AI_MARK}</span> }]
+      : []),
     ...(locked
       ? [
           {

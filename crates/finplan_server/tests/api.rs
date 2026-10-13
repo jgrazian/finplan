@@ -4926,6 +4926,37 @@ async fn a_review_without_a_model_reports_no_model_pass() {
 }
 
 #[tokio::test]
+async fn health_says_whether_the_server_has_ai_before_sign_in() {
+    let (status, health) = TestApp::new().await.get("/api/health").await;
+    assert_eq!(status, StatusCode::OK, "{health}");
+    assert_eq!(health["ai"], false, "{health}");
+    let script = Script::new(vec![]);
+    let (_, health) = TestApp::with_review_ai(script.client())
+        .await
+        .get("/api/health")
+        .await;
+    assert_eq!(health["ai"], true, "{health}");
+}
+
+#[tokio::test]
+async fn a_review_with_ai_off_writes_the_rule_notes_and_asks_no_model() {
+    let script = Script::new(vec![]);
+    let mut app = TestApp::with_review_ai(script.client()).await;
+    app.login_as("ai-off@example.com").await;
+    let (scenario_id, _, _) = app.reviewable_plan().await;
+    let (status, review) = app
+        .post(
+            &format!("/api/scenarios/{scenario_id}/review"),
+            json!({"run_id": null, "ai": false}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{review}");
+    assert_eq!(review["ai"], Value::Null, "{review}");
+    assert!(!review["suggestions"].as_array().unwrap().is_empty());
+    assert!(script.requests.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn the_model_adds_checked_notes_after_the_rule_notes() {
     // Two passes: the first writes a note the user then dismisses; the second
     // proposes it again and is kept quiet.

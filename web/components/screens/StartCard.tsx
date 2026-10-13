@@ -2,6 +2,7 @@
 
 import { ChartCanvas, FanSeries, Legend, domainFor, makeScale } from "@/components/charts";
 import { PHONE_GEOMETRY } from "@/components/results/NetWorthChart";
+import { AI_MARK } from "@/components/scenario/DescribePitch";
 import { Button } from "@/components/ui";
 import { fmtAxis } from "@/lib/format";
 import { useIsMobile } from "@/lib/hooks/useIsMobile";
@@ -61,6 +62,7 @@ export function StartCard({
   onImport,
   local,
   account,
+  ai,
 }: {
   onCreate: () => void;
   /** Makes the example household's plan and opens it running. */
@@ -72,6 +74,8 @@ export function StartCard({
   local: boolean;
   /** A guest's way to an account; shown here on a phone, whose header has no room. */
   account?: { onSignUp: () => void; onSignIn: () => void };
+  /** The server has AI: offer AI-assisted setup as what an account adds. */
+  ai?: boolean;
 }) {
   const scale = useIsMobile() ? PHONE_SCALE : SCALE;
   return (
@@ -112,7 +116,22 @@ export function StartCard({
             </>
           )}
         </p>
-        {account && (
+        {account && ai && (
+          <div className="start-ai">
+            <span className="start-ai-mark">{AI_MARK} AI-assisted setup</span>
+            <p>
+              Rather describe it? With a free account, write a few sentences or upload statements,
+              and AI drafts the plan for you to review.
+            </p>
+            <div className="start-ai-actions">
+              <Button onClick={account.onSignUp}>Create a free account</Button>
+              <button type="button" className="linkbtn" onClick={account.onSignIn}>
+                Sign in
+              </button>
+            </div>
+          </div>
+        )}
+        {account && !ai && (
           <p className="start-quiet start-account">
             <button type="button" className="linkbtn" onClick={account.onSignIn}>
               Sign in
