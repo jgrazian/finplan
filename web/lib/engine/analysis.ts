@@ -116,9 +116,12 @@ export class AnalysisJobs {
     }
     const handle = this.core.pool.analysis(
       { graph: plan.graph, library, body: bodyJson, quick: false },
-      (done, total) => {
+      // The budget costed above stays the denominator, as the server keeps
+      // its own: the engine's total restarts with each phase, and a what-if
+      // announces none, so its total only ever equals `done` ("1,970 of 1,970").
+      (done) => {
         job.completed = done;
-        job.total = total;
+        job.total = Math.max(job.total, done);
       },
     );
     job.handle = handle;

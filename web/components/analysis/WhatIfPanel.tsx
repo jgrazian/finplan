@@ -358,9 +358,13 @@ export function WhatIfPanel({
             style={{ fontSize: 12, color: MUTED, fontVariantNumeric: "tabular-nums" }}
             aria-live="polite"
           >
-            {`${current ? "Refining" : "Updating"}…`}
+            {current ? "Refining the estimate…" : "Updating…"}
             {current && job.active && job.job
-              ? ` ${fmtInt(job.job.completed)} of about ${fmtInt(job.job.total)} simulations`
+              ? // The total is the budget: once it is reached the result is
+                // being stored, and "1,970 of about 1,970" would read as stuck.
+                job.job.completed >= job.job.total
+                ? " almost done"
+                : ` ${fmtInt(job.job.completed)} of about ${fmtInt(job.job.total)} simulations`
               : ""}
           </span>
         )}

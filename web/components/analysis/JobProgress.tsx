@@ -40,7 +40,9 @@ export function JobProgress({
           color: "color-mix(in srgb, var(--color-text) 58%, transparent)",
         }}
       >
-        {fmtInt(done)} of about {fmtInt(total)} simulations
+        {total > 0 && done >= total
+          ? `All ${fmtInt(total)} simulations done, saving the result…`
+          : `${fmtInt(done)} of about ${fmtInt(total)} simulations`}
       </p>
       <Button onClick={onCancel}>Cancel</Button>
     </div>
