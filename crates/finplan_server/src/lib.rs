@@ -17,6 +17,7 @@
 //! worlds: the plan as a value (rows, specs, edits, compiling, results
 //! projection) lives in the `finplan_plan` crate, which has no database.
 
+pub mod admin;
 pub mod analysis;
 pub mod api;
 pub mod auth;
@@ -33,6 +34,7 @@ pub mod runner;
 pub mod seed;
 pub mod state;
 pub mod suggest;
+pub mod usage;
 
 use std::sync::Arc;
 

@@ -27,6 +27,7 @@ fn config(hosted: bool) -> ServerConfig {
         plan_chat: Default::default(),
         log_format: Default::default(),
         metrics_bind: None,
+        admin_bind: None,
         hosted,
         access_mode: Default::default(),
         registration_open: true,

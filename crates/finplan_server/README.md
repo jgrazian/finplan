@@ -50,6 +50,7 @@ Configuration comes from flags or environment variables:
 | `FINPLAN_CORS_ORIGINS` | `http://localhost:3000` | Comma-separated allowed origins |
 | `FINPLAN_LOG_FORMAT` | `auto` | `json`, `text`, or `auto` (JSON when hosted, text locally) |
 | `FINPLAN_METRICS_BIND` | unset | Optional private metrics listener, e.g. `127.0.0.1:9090` |
+| `FINPLAN_ADMIN_BIND` | unset | Optional admin pages (users, billing, AI spend, inbox), e.g. `127.0.0.1:8090`; loopback only |
 | `RUST_LOG` | application INFO, dependencies WARN | Logging filter |
 
 ## Logs and metrics
@@ -65,6 +66,27 @@ curl http://127.0.0.1:9090/metrics
 It does not use browser authentication. Keep the listener on a private network
 or behind an authenticated proxy when binding beyond loopback. Leaving the
 setting unset disables the listener; application logging remains enabled.
+
+## Admin pages
+
+```bash
+FINPLAN_ADMIN_BIND=127.0.0.1:8090 cargo run --bin finplan-server
+open http://localhost:8090
+```
+
+A separate listener (`src/admin/`) serving plain HTML over the database: users
+and their plans, sessions and allowances; subscriptions; AI token spend from
+the `ai_usage` ledger, which every model pass (review, note and plan chat,
+drafts) writes one row to when it ends, by month (`/usage/months`) or within one
+(`/usage?month=YYYY-MM`); and the contact inbox. It can grant
+or revoke a `manual` Pro subscription, reset a user's monthly allowances, sign
+a user out everywhere, delete a user, and triage messages. Every write logs
+`admin.action`.
+
+There is no sign-in. The listener refuses a non-loopback bind at startup,
+answers only a loopback `Host` (no DNS rebinding), and accepts a POST only
+with its own `Origin` (no cross-site form posts). For a remote server, tunnel:
+`ssh -L 8090:127.0.0.1:8090 host`.
 
 Activity logs record committed account/scenario changes, authentication actions,
 and run/analysis lifecycle events using internal IDs. The server generates an

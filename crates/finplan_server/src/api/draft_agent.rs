@@ -56,6 +56,7 @@ use crate::suggest::ai::draft::{
 };
 use crate::suggest::ai::tools::{PathRank, ToolHost, unavailable};
 use crate::suggest::ai::{AiError, BoxFuture};
+use crate::usage::Feature;
 use finplan_plan::graph::ScenarioGraph;
 use finplan_plan::suggest::{self, Change, ChangeProblem, Created, DiffLine};
 
@@ -555,7 +556,6 @@ async fn run_segment(state: AppState, reviews: AiReviews, segment: Segment) {
     };
     let _running = telemetry.job_started(JobKind::ReviewAi);
     let mut ended = PassEnd::new(&telemetry, reviews.model());
-    let observer = PassMetrics::new(&telemetry, reviews.model());
     let Segment {
         job,
         scenario_id,
@@ -565,6 +565,13 @@ async fn run_segment(state: AppState, reviews: AiReviews, segment: Segment) {
         message,
         follow_up,
     } = segment;
+    let observer = PassMetrics::new(&telemetry, reviews.model()).charged(
+        &state.db,
+        Feature::Draft,
+        &user.id,
+        scenario_id,
+        None,
+    );
 
     let prepared = prepare(&state, &user, scenario_id, &job, follow_up).await;
     let (host, input, transcript) = match prepared {

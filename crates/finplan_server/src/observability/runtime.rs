@@ -9,12 +9,14 @@ use tracing::instrument::WithSubscriber;
 use super::{Component, ErrorClass, JobKind, QueueSnapshot, Telemetry, metrics_router};
 use crate::{analysis::AnalysisJobs, auth, billing, db::Db, state::AppState};
 
-/// Owns observability/maintenance tasks. Dropping it aborts every task; normal
-/// shutdown also drains the private listener. build() never opens a listener.
+/// Owns observability/maintenance tasks and the private listeners (metrics and
+/// `admin`). Dropping it aborts every task; normal shutdown also drains the
+/// private listeners. build() never opens a listener.
 pub struct ObservabilityRuntime {
     stop: watch::Sender<bool>,
     tasks: JoinSet<io::Result<()>>,
     metrics_address: Option<SocketAddr>,
+    admin_address: Option<SocketAddr>,
 }
 
 impl ObservabilityRuntime {
@@ -30,10 +32,35 @@ impl ObservabilityRuntime {
             None => None,
         };
         let metrics_address = listener.as_ref().map(|l| l.local_addr()).transpose()?;
+        let admin_listener = match state.config.admin_bind {
+            Some(address) => Some(tokio::net::TcpListener::bind(address).await.inspect_err(
+                |error| {
+                    tracing::error!(event = "server.listener_failed", listener = "admin",
+                    %address, class = ?error.kind(), os_error = error.raw_os_error());
+                },
+            )?),
+            None => None,
+        };
+        let admin_address = admin_listener
+            .as_ref()
+            .map(|l| l.local_addr())
+            .transpose()?;
         let (stop, receive) = watch::channel(false);
         let mut tasks = JoinSet::new();
         if let Some(listener) = listener {
             let router = metrics_router(state.telemetry.clone());
+            let shutdown = receive.clone();
+            tasks.spawn(
+                async move {
+                    axum::serve(listener, router)
+                        .with_graceful_shutdown(stopped(shutdown))
+                        .await
+                }
+                .with_current_subscriber(),
+            );
+        }
+        if let Some(listener) = admin_listener {
+            let router = crate::admin::router(state.clone());
             let shutdown = receive.clone();
             tasks.spawn(
                 async move {
@@ -127,11 +154,16 @@ impl ObservabilityRuntime {
             stop,
             tasks,
             metrics_address,
+            admin_address,
         })
     }
 
     pub fn metrics_address(&self) -> Option<SocketAddr> {
         self.metrics_address
+    }
+
+    pub fn admin_address(&self) -> Option<SocketAddr> {
+        self.admin_address
     }
 
     /// A task returning while the server is still running is a service failure.
@@ -250,6 +282,7 @@ mod tests {
             plan_chat: Default::default(),
             log_format: Default::default(),
             metrics_bind,
+            admin_bind: None,
             hosted: false,
             access_mode: Default::default(),
             registration_open: true,

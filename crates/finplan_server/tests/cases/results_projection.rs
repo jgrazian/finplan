@@ -193,6 +193,7 @@ pub(super) async fn app_with_state() -> (TestApp, finplan_server::state::AppStat
         plan_chat: Default::default(),
         log_format: Default::default(),
         metrics_bind: None,
+        admin_bind: None,
         bind: "127.0.0.1:0".into(),
         database_url: format!("sqlite://{}", dir.path().join("test.db").display()),
         db_pool_size: 4,

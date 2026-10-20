@@ -171,6 +171,7 @@ at `http://fedora.local:3000`.
 | Service | Listens on | Scrapes / serves |
 |---|---|---|
 | finplan-server metrics | `127.0.0.1:9480` | `FINPLAN_METRICS_BIND` in `server.env` |
+| finplan-server admin | `127.0.0.1:9481` | `FINPLAN_ADMIN_BIND`; open through `ssh -L 9481:127.0.0.1:9481` |
 | prometheus | `127.0.0.1:9090` | TSDB in `/var/lib/prometheus/data` |
 | prometheus-node-exporter | `127.0.0.1:9100` | host stats, finplan-related systemd units |
 | grafana-server | `0.0.0.0:3000` | login required, sign-up disabled |

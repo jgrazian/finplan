@@ -628,7 +628,7 @@ mod tests {
         source.close().await;
 
         let report = rebuild(&source_path, &destination_path).await.unwrap();
-        assert_eq!(report.tables, 61);
+        assert_eq!(report.tables, 62);
 
         let rebuilt = connect(&format!("sqlite://{}", destination_path.display()), 1)
             .await

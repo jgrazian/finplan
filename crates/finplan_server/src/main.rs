@@ -140,7 +140,7 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         })?;
     let mut runtime = ObservabilityRuntime::start(&state).await?;
     tracing::info!(event = "server.ready", address = %listener.local_addr()?,
-        metrics_address = ?runtime.metrics_address());
+        metrics_address = ?runtime.metrics_address(), admin_address = ?runtime.admin_address());
     let (stop, mut receive) = tokio::sync::watch::channel(false);
     let server = axum::serve(
         listener,

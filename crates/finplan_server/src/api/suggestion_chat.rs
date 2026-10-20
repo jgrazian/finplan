@@ -56,6 +56,7 @@ use crate::runner::telemetry::{Attempt, Submitted};
 use crate::state::AppState;
 use crate::suggest::ai::chat::{self, BoardNote, ChatInput, ChatRole as ModelRole, Subject};
 use crate::suggest::ai::{AiError, AiOutcome, ReviewContext, stop_tag};
+use crate::usage::Feature;
 use finplan_plan::graph::ScenarioGraph;
 use finplan_plan::rules;
 
@@ -684,7 +685,17 @@ async fn run(state: AppState, reviews: AiReviews, turn: Turn) {
     let mut attempt = Attempt::new(&telemetry, &turn.job_context, turn.submitted.clone());
     let started = Instant::now();
     let model = reviews.model().to_owned();
-    let metrics = PassMetrics::new(&telemetry, &model);
+    let feature = match thread {
+        Thread::Note(_) => Feature::NoteChat,
+        Thread::Plan(_) => Feature::PlanChat,
+    };
+    let metrics = PassMetrics::new(&telemetry, &model).charged(
+        &state.db,
+        feature,
+        &turn.user.id,
+        turn.scenario_id,
+        turn.job_context.request_id.clone(),
+    );
     let observer = ActivityObserver::new(&metrics, reviews.chat_activity(), thread);
     let finish = |outcome: AiPassOutcome| {
         telemetry.review_chat_turn(&model, outcome, started.elapsed().as_secs_f64());

@@ -70,6 +70,7 @@ number on screen.
 | Load a plan from SQLite | `crates/finplan_server/src/db/graph.rs` - `load()` |
 | Summary -> results bodies | `crates/finplan_plan/src/results/mod.rs` - `project()` |
 | Schema | `crates/finplan_server/migrations/0001_init.sql` |
+| Admin pages (users, billing, AI spend) | `crates/finplan_server/src/admin/` - `router()`; ledger in `src/usage.rs` |
 
 ## finplan_core Navigation
 

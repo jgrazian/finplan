@@ -25,7 +25,7 @@ pub enum AccessMode {
 }
 
 impl AccessMode {
-    fn from_config(config: &ServerConfig) -> Self {
+    pub fn from_config(config: &ServerConfig) -> Self {
         if !config.hosted {
             Self::SelfHosted
         } else if config.access_mode == HostedAccessMode::Beta {

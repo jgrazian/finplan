@@ -58,6 +58,7 @@ use crate::suggest::ai::{
     AiClient, AiDraft, AiError, AiOutcome, BoxFuture, LedgerSum, Observer, ReviewContext, Stop,
     ToolHost, TurnReport, render_breakdown, render_path, stop_tag,
 };
+use crate::usage::{Feature, Ledger};
 use finplan_plan::graph::ScenarioGraph;
 use finplan_plan::suggest::{self, Change, ChangeProblem, Created, DiffLine};
 
@@ -287,7 +288,13 @@ async fn run(state: AppState, reviews: AiReviews, pass: Pass) {
     // being aborted by a newer review, which reads as `superseded`.
     let mut ended = PassEnd::new(&telemetry, reviews.model());
     let _activity = reviews.review_activity.begin(pass.scenario_id);
-    let metrics = PassMetrics::new(&telemetry, reviews.model());
+    let metrics = PassMetrics::new(&telemetry, reviews.model()).charged(
+        &state.db,
+        Feature::Review,
+        &pass.user.id,
+        pass.scenario_id,
+        pass.job_context.request_id.clone(),
+    );
     let observer = ActivityObserver::new(&metrics, &reviews.review_activity, pass.scenario_id);
 
     let loaded = Tools::load(
@@ -462,9 +469,13 @@ impl Drop for PassEnd {
 /// The model loop's reports, as `finplan_review_ai_*` metrics. Labels are
 /// the configured model and bounded enums only. Chat turns report through it
 /// too, so those families total every review-model request.
+///
+/// With a [`Ledger`], each turn's spend is also added to the pass's
+/// `ai_usage` row, written when the metrics are dropped.
 pub(super) struct PassMetrics {
     telemetry: Telemetry,
     model: String,
+    ledger: Option<Ledger>,
 }
 
 impl PassMetrics {
@@ -472,12 +483,36 @@ impl PassMetrics {
         Self {
             telemetry: telemetry.clone(),
             model: model.to_owned(),
+            ledger: None,
         }
+    }
+
+    /// Charge the pass's turns to `user` in the spend ledger.
+    pub(super) fn charged(
+        mut self,
+        db: &Db,
+        feature: Feature,
+        user: &str,
+        scenario_id: i64,
+        request_id: Option<String>,
+    ) -> Self {
+        self.ledger = Some(Ledger::new(
+            db,
+            feature,
+            user,
+            scenario_id,
+            &self.model,
+            request_id,
+        ));
+        self
     }
 }
 
 impl Observer for PassMetrics {
     fn turn(&self, turn: &TurnReport) {
+        if let Some(ledger) = &self.ledger {
+            ledger.turn(turn);
+        }
         let t = &self.telemetry;
         t.review_ai_turn(&self.model, turn.seconds);
         t.review_ai_tokens(&self.model, AiTokenType::Input, turn.input_tokens);

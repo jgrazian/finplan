@@ -76,6 +76,7 @@ impl Fixture {
             trusted_proxies: vec![],
             log_format: LogFormat::Json,
             metrics_bind: None,
+            admin_bind: None,
         };
         let (router, state) = finplan_server::build_with(config, review_ai).await.unwrap();
         let user_id = uuid::Uuid::new_v4().to_string();

@@ -76,6 +76,13 @@ pub struct ServerConfig {
     #[arg(long, env = "FINPLAN_METRICS_BIND")]
     pub metrics_bind: Option<std::net::SocketAddr>,
 
+    /// Optional admin listener (`admin`), e.g. 127.0.0.1:8090: users,
+    /// billing, AI spend and the contact inbox, as HTML pages with no sign-in.
+    /// Unset disables it. Loopback only; reach a remote server's through an
+    /// SSH tunnel.
+    #[arg(long, env = "FINPLAN_ADMIN_BIND")]
+    pub admin_bind: Option<std::net::SocketAddr>,
+
     /// Enable strict hosted origin and cookie protections.
     #[arg(long, env = "FINPLAN_HOSTED", default_value_t = false)]
     pub hosted: bool,
@@ -188,6 +195,9 @@ impl ServerConfig {
                 }))
         {
             return Err("hosted mode requires secure cookies, explicit HTTPS origins, and no local mail sink".into());
+        }
+        if self.admin_bind.is_some_and(|a| !a.ip().is_loopback()) {
+            return Err("the admin listener must bind a loopback address".into());
         }
         if self.sim_workers == 0 {
             return Err("simulation workers must be positive".into());
