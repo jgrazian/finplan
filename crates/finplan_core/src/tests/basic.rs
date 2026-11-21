@@ -175,6 +175,12 @@ fn test_simulation_basic() {
 /// whether the batches ran on the rayon pool (`parallel`) or in sequence. The
 /// literals below were recorded with the `parallel` feature on and must hold
 /// with `--no-default-features` too.
+///
+/// They are compared to a relative 1e-9, not bit for bit: `exp`/`ln`/`powf`
+/// come from the platform's libm and differ in the last place between macOS
+/// and Linux, and the standard deviation (a difference of two large sums)
+/// magnifies that. Bit-for-bit equality across executors on one machine is
+/// what `tests/batches.rs` holds.
 #[test]
 fn seeded_summary_is_identical_with_and_without_parallel() {
     let params = SimulationConfig {
@@ -222,14 +228,22 @@ fn seeded_summary_is_identical_with_and_without_parallel() {
     assert_eq!(a.stats.mean_final_net_worth, b.stats.mean_final_net_worth);
     assert_eq!(a.stats.percentile_values, b.stats.percentile_values);
 
-    assert_eq!(a.stats.mean_final_net_worth, 17220.955290741847);
-    assert_eq!(a.stats.std_dev_final_net_worth, 7365.488287601848);
-    assert_eq!(
-        a.stats.percentile_values,
-        vec![
-            (0.05, 7340.971975896122),
-            (0.5, 16476.744380555585),
-            (0.95, 29748.52627559062),
-        ]
-    );
+    let close = |got: f64, want: f64| {
+        assert!(
+            ((got - want) / want).abs() < 1e-9,
+            "got {got}, recorded {want}"
+        );
+    };
+    close(a.stats.mean_final_net_worth, 17220.955290741847);
+    close(a.stats.std_dev_final_net_worth, 7365.488287601848);
+    let recorded = [
+        (0.05, 7340.971975896122),
+        (0.5, 16476.744380555585),
+        (0.95, 29748.52627559062),
+    ];
+    assert_eq!(a.stats.percentile_values.len(), recorded.len());
+    for ((p, got), (want_p, want)) in a.stats.percentile_values.iter().zip(recorded) {
+        assert_eq!(*p, want_p);
+        close(*got, want);
+    }
 }
